@@ -35,6 +35,18 @@ class RepereIntrouvable(ErreurPilote):
         super().__init__(message)
 
 
+class ModeleIntrouvable(ErreurPilote):
+    def __init__(self, nom: str) -> None:
+        self.nom = nom
+        super().__init__(f"Le modèle « {nom} » n'est pas proposé par Gemini.")
+
+
+class NiveauIntrouvable(ErreurPilote):
+    def __init__(self, nom: str) -> None:
+        self.nom = nom
+        super().__init__(f"Le niveau de réflexion « {nom} » n'est pas proposé par Gemini.")
+
+
 class DelaiDepasse(ErreurPilote):
     def __init__(self, delai: float, partiel: str) -> None:
         self.partiel = partiel

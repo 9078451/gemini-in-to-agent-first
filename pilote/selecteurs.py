@@ -28,4 +28,15 @@ REPERES: dict[str, list[str]] = {
         "a[href*='accounts.google.com/ServiceLogin']",
         "a[href*='accounts.google.com/v3/signin']",
     ],
+    "bouton_mode": [
+        "button[aria-label*='sélecteur de mode']",
+        "button[aria-label*='mode picker']",
+    ],
 }
+
+# Sélecteur de mode : menu des modèles et sous-menu « Niveau de réflexion ».
+OPTION_MENU = "gem-menu-item[role='menuitem']"
+OPTION_MODELE = "gem-menu-item[data-mode-id]"
+LIBELLE_OPTION = ".label"
+SOUS_LIBELLE_OPTION = ".sublabel"
+ENTREE_NIVEAU = "Niveau de réflexion"

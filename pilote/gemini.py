@@ -11,34 +11,9 @@ from pilote.attente import attendre_fin_reponse
 from pilote.chrome import ChromeDedie
 from pilote.erreurs import DelaiDepasse, PasConnecteGoogle, RepereIntrouvable, VerificationGoogle
 from pilote.modeles import ResultatGemini
-from pilote.selecteurs import REPERES
+from pilote.reperes import attendre_repere, compter, premier_present
 
 journal = logging.getLogger(__name__)
-
-
-def premier_present(page: Page, nom: str) -> Locator | None:
-    """Premier candidat du repère `nom` qui trouve au moins un élément."""
-    for selecteur in REPERES[nom]:
-        elements = page.locator(selecteur)
-        if elements.count() > 0:
-            return elements
-    return None
-
-
-def attendre_repere(page: Page, nom: str, delai: float) -> Locator:
-    fin = time.monotonic() + delai
-    while True:
-        elements = premier_present(page, nom)
-        if elements is not None:
-            return elements
-        if time.monotonic() >= fin:
-            raise RepereIntrouvable(nom)
-        time.sleep(0.3)
-
-
-def compter(page: Page, nom: str) -> int:
-    elements = premier_present(page, nom)
-    return elements.count() if elements is not None else 0
 
 
 class PiloteGemini:
