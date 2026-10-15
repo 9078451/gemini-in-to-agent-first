@@ -4,11 +4,12 @@ import logging
 import uvicorn
 
 import config
-from agent_first.conversations import MemoireConversations
 from agent_first.file_attente import FileAttente
+from agent_first.historique import Historique
 from agent_first.serveur import creer_app
 from pilote.chrome import ChromeDedie
 from pilote.gemini import PiloteGemini
+from pilote.modeles import Modes, Option
 
 
 def main() -> None:
@@ -32,8 +33,12 @@ def main() -> None:
 
     file = FileAttente(fabrique_pilote)
     file.demarrer()
-    memoire = MemoireConversations(config.FICHIER_CONVERSATIONS)
-    app = creer_app(file, memoire, config.DELAI_AGENT, chrome.est_lance)
+    historique = Historique(config.FICHIER_HISTORIQUE)
+    par_defaut = Modes(
+        [Option(nom, description) for nom, description in config.MODELES_PAR_DEFAUT],
+        [Option(nom, description) for nom, description in config.NIVEAUX_PAR_DEFAUT],
+    )
+    app = creer_app(file, historique, config.DELAI_AGENT, chrome.est_lance, par_defaut)
     try:
         uvicorn.run(app, host=config.HOTE_AGENT, port=config.PORT_AGENT)
     finally:
