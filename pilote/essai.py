@@ -3,6 +3,7 @@
 Usage :
   python -m pilote.essai "Bonjour"                     nouvelle conversation
   python -m pilote.essai "Et ensuite ?" --suite URL    continue la conversation URL
+  python -m pilote.essai "Bonjour" --modele "3.1 Pro" --niveau Max. --html
 Dans le texte, \\n devient un retour à la ligne.
 """
 import argparse
@@ -20,6 +21,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Envoie un message à Gemini web.")
     parser.add_argument("texte")
     parser.add_argument("--suite", metavar="URL", help="adresse d'une conversation Gemini à continuer")
+    parser.add_argument("--modele", help="ex. « 3.1 Pro »")
+    parser.add_argument("--niveau", help="Min., Moyen ou Max.")
+    parser.add_argument("--html", action="store_true", help="affiche aussi le HTML de la réponse")
     args = parser.parse_args()
 
     chrome = ChromeDedie(config.CHEMIN_CHROME, config.DOSSIER_PROFIL, config.PORT_CHROME, config.URL_GEMINI)
@@ -27,14 +31,19 @@ def main() -> int:
         chrome, config.URL_GEMINI, config.DELAI_REPONSE, config.STABILITE, config.DOSSIER_JOURNAUX
     )
     try:
-        resultat = pilote.envoyer(args.suite, args.texte.replace("\\n", "\n"))
+        resultat = pilote.envoyer(args.suite, args.texte.replace("\\n", "\n"), args.modele, args.niveau)
     except ErreurPilote as e:
         print(f"ERREUR : {e}", file=sys.stderr)
         return 1
     finally:
         chrome.fermer()
     print(resultat.reponse)
-    print(f"\n[conversation : {resultat.adresse}]")
+    if args.html:
+        print("\n--- HTML ---\n" + resultat.html)
+    print(
+        f"\n[conversation : {resultat.adresse} · modèle : {resultat.modele or '?'}"
+        f" · niveau : {resultat.niveau or '?'} · {resultat.duree} s]"
+    )
     return 0
 
 

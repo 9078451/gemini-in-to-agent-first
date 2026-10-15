@@ -56,7 +56,7 @@ def choisir_modele(page: Page, nom: str) -> None:
         option = _option(page, nom, OPTION_MODELE)
         if option.count() == 0:
             raise ModeleIntrouvable(nom)
-        option.first.click()
+        _cliquer(option)
     finally:
         _fermer(page)
     # Vérifié dans le menu (option « selected ») : le libellé du bouton varie
@@ -74,7 +74,7 @@ def choisir_niveau(page: Page, nom: str) -> bool:
         option = _option(page, nom, OPTION_NIVEAU)
         if option.count() == 0:
             raise NiveauIntrouvable(nom)
-        option.first.click()
+        _cliquer(option)
     finally:
         _fermer(page)
     if lire_modes(page).niveau_actif != nom:
@@ -85,6 +85,13 @@ def choisir_niveau(page: Page, nom: str) -> bool:
 def _ouvrir(page: Page) -> None:
     attendre_repere(page, "bouton_mode", 10).first.click()
     page.locator(OPTION_MODELE).first.wait_for(state="visible", timeout=5000)
+
+
+def _cliquer(option: Locator) -> None:
+    """Clic envoyé directement à l'option : dans une nouvelle conversation, la
+    saisie est au milieu de l'écran et le sous-menu dépasse de la fenêtre,
+    où un clic à la souris est impossible."""
+    option.first.dispatch_event("click")
 
 
 def _fermer(page: Page) -> None:
@@ -108,7 +115,7 @@ def _ouvrir_niveaux(page: Page) -> bool:
     entree = _option(page, ENTREE_NIVEAU, OPTION_MENU)
     if entree.count() == 0:
         return False
-    entree.first.click()
+    _cliquer(entree)
     fin = time.monotonic() + 5
     while time.monotonic() < fin:
         if any(not o["modele"] and o["nom"] != ENTREE_NIVEAU for o in _lire(page)):

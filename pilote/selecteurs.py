@@ -40,3 +40,9 @@ OPTION_MODELE = "gem-menu-item[data-mode-id]"
 LIBELLE_OPTION = ".label"
 SOUS_LIBELLE_OPTION = ".sublabel"
 ENTREE_NIVEAU = "Niveau de réflexion"
+
+# Réponse en HTML : contenu utile, blocs de code et décor de Gemini à retirer.
+CONTENU_REPONSE = ".markdown"
+BLOC_CODE = "code-block"
+ENTETE_CODE = ".code-block-decoration"
+DECOR_REPONSE = "button, gem-icon-button, gem-icon, mat-icon, gem-popover, .table-footer, .code-block-decoration"

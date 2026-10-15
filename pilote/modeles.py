@@ -7,6 +7,10 @@ from typing import Protocol
 class ResultatGemini:
     reponse: str
     adresse: str  # adresse de la conversation, ex. https://gemini.google.com/app/abc123
+    html: str = ""
+    modele: str | None = None
+    niveau: str | None = None
+    duree: float = 0.0  # secondes entre l'envoi et la fin de la réponse
 
 
 @dataclass(frozen=True)
@@ -31,6 +35,10 @@ class Modes:
 
 
 class Pilote(Protocol):
-    def envoyer(self, adresse: str | None, texte: str) -> ResultatGemini: ...
+    def envoyer(
+        self, adresse: str | None, texte: str, modele: str | None = None, niveau: str | None = None
+    ) -> ResultatGemini: ...
 
     def est_connecte(self) -> bool: ...
+
+    def lister_modes(self) -> Modes: ...
