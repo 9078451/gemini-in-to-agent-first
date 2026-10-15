@@ -1,0 +1,56 @@
+"""Un seul Chrome : les demandes passent une par une, dans un fil dédié.
+
+Playwright (mode synchrone) doit être utilisé depuis le fil qui l'a créé :
+le pilote est donc fabriqué et utilisé uniquement dans le fil de la file.
+"""
+import logging
+import queue
+import threading
+from concurrent.futures import Future
+from typing import Callable, TypeVar
+
+from pilote.erreurs import ErreurPilote
+from pilote.modeles import Pilote
+
+T = TypeVar("T")
+journal = logging.getLogger(__name__)
+_FIN = object()
+
+
+class FileAttente:
+    def __init__(self, fabrique_pilote: Callable[[], Pilote]) -> None:
+        self._fabrique = fabrique_pilote
+        self._pilote: Pilote | None = None
+        self._taches: queue.Queue = queue.Queue()
+        self._fil = threading.Thread(target=self._boucle, name="file-gemini", daemon=True)
+
+    def demarrer(self) -> None:
+        self._fil.start()
+
+    def arreter(self) -> None:
+        self._taches.put(_FIN)
+        self._fil.join(timeout=10)
+
+    def soumettre(self, travail: Callable[[Pilote], T]) -> "Future[T]":
+        futur: Future = Future()
+        self._taches.put((travail, futur))
+        return futur
+
+    def _boucle(self) -> None:
+        while True:
+            element = self._taches.get()
+            if element is _FIN:
+                return
+            travail, futur = element
+            if not futur.set_running_or_notify_cancel():
+                continue
+            try:
+                if self._pilote is None:
+                    self._pilote = self._fabrique()
+                futur.set_result(travail(self._pilote))
+            except ErreurPilote as e:
+                journal.warning("Demande à Gemini échouée : %s", e)
+                futur.set_exception(e)
+            except Exception as e:
+                journal.exception("Erreur inattendue dans la file d'attente")
+                futur.set_exception(e)
