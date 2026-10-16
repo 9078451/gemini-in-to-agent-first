@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agent.first</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+  <svg class="sprite" aria-hidden="true">
+    <symbol id="i-recherche" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.6-4.6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-accueil" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="8" rx="1.5"/><rect x="4" y="15.5" width="6.5" height="4.5" rx="1.5"/><rect x="13.5" y="11.5" width="6.5" height="8.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="4.5" rx="1.5"/></symbol>
+    <symbol id="i-historique" viewBox="0 0 24 24"><path d="M12 8v4l2.5 2.5"/><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6M3.5 4v4h4"/></symbol>
+    <symbol id="i-reglages" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></symbol>
+    <symbol id="i-barre" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/></symbol>
+    <symbol id="i-etincelle" viewBox="0 0 24 24"><path d="M12 3.5l1.9 5 5 1.9-5 1.9-1.9 5-1.9-5-5-1.9 5-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></symbol>
+    <symbol id="i-fleche" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-fleche-haut" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-copier" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5v-2a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="i-corbeille" viewBox="0 0 24 24"><path d="M4.5 7h15M10 11v6M14 11v6M6 7l1 11.5a2 2 0 0 0 2 1.5h6a2 2 0 0 0 2-1.5L18 7M9 7V4.5h6V7"/></symbol>
+    <symbol id="i-messages" viewBox="0 0 24 24"><path d="M20 15a2 2 0 0 1-2 2H8.5L4 20.5V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/></symbol>
+    <symbol id="i-graphique" viewBox="0 0 24 24"><path d="M4 19.5h16M5.5 15l4-4.5 3.5 3 5.5-6.5"/></symbol>
+    <symbol id="i-horloge" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+    <symbol id="i-fermer" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+  </svg>
+
+  <aside class="barre">
+    <div class="barre-haut">
+      <span class="logo">agent<span class="logo-point">.</span>first</span>
+      <button class="icone" id="replier" type="button" aria-label="Replier la barre latérale" title="Replier"><svg><use href="#i-barre"/></svg></button>
+    </div>
+    <label class="recherche">
+      <svg><use href="#i-recherche"/></svg>
+      <input id="recherche" type="search" placeholder="Rechercher…" autocomplete="off" aria-label="Rechercher dans les conversations">
+      <kbd>/</kbd>
+    </label>
+    <nav class="nav">
+      <button class="nav-item principal" id="nouvelle" type="button"><svg><use href="#i-plus"/></svg>Nouvelle conversation</button>
+      <button class="nav-item" id="aller-accueil" type="button" data-vue="accueil"><svg><use href="#i-accueil"/></svg>Accueil</button>
+    </nav>
+    <div class="section-titre">Conversations</div>
+    <div class="liste-conversations" id="liste-conversations"></div>
+    <div class="section-titre">App</div>
+    <nav class="nav">
+      <button class="nav-item" id="aller-historique" type="button"><svg><use href="#i-historique"/></svg>Historique</button>
+      <button class="nav-item" id="ouvrir-parametres" type="button"><svg><use href="#i-reglages"/></svg>Paramètres</button>
+    </nav>
+    <div class="compte">
+      <span class="avatar">G</span>
+      <div>
+        <div class="compte-nom">Compte Google</div>
+        <div class="compte-etat" id="etat-google">…</div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="principal-zone">
+    <button class="icone" id="deplier" type="button" aria-label="Déplier la barre latérale" title="Déplier"><svg><use href="#i-barre"/></svg></button>
+
+    <section class="vue" id="vue-accueil">
+      <header class="accueil-entete">
+        <h1>Bon retour sur <span class="accent">agent.first</span></h1>
+        <p>Voici tes conversations avec Gemini.</p>
+      </header>
+      <form class="grande-recherche" id="form-historique" role="search">
+        <span class="rond"><svg><use href="#i-recherche"/></svg></span>
+        <input id="recherche-historique" type="search" placeholder="Rechercher dans l'historique…" autocomplete="off" aria-label="Rechercher dans l'historique">
+        <button class="icone" type="submit" aria-label="Rechercher"><svg><use href="#i-fleche"/></svg></button>
+      </form>
+      <div class="cartes" id="cartes"></div>
+      <section class="panneau" id="panneau-historique">
+        <div class="panneau-entete">
+          <div>
+            <h2>Historique</h2>
+            <p>Clique sur une conversation pour la reprendre.</p>
+          </div>
+          <div class="segments" id="periodes">
+            <button type="button" data-periode="7j" class="actif">7 jours</button>
+            <button type="button" data-periode="30j">30 jours</button>
+            <button type="button" data-periode="tout">Tout</button>
+          </div>
+        </div>
+        <div class="lignes" id="lignes-historique"></div>
+      </section>
+    </section>
+
+    <section class="vue" id="vue-discussion" hidden>
+      <header class="discussion-entete">
+        <h2 id="titre-conversation">Nouvelle conversation</h2>
+        <div class="reglages">
+          <div class="menu-modele">
+            <button class="pilule" id="bouton-modele" type="button" aria-haspopup="listbox" aria-expanded="false">
+              <svg class="accent"><use href="#i-etincelle"/></svg><span id="nom-modele">Modèle</span><svg class="discret"><use href="#i-chevron"/></svg>
+            </button>
+            <div class="menu" id="menu-modeles" role="listbox" aria-label="Modèle" hidden></div>
+          </div>
+          <div class="segments" id="niveaux" role="radiogroup" aria-label="Niveau de réflexion"></div>
+        </div>
+      </header>
+      <div class="fil" id="fil"></div>
+      <form class="saisie" id="form-saisie">
+        <textarea id="saisie" rows="1" placeholder="Demande à Gemini…" aria-label="Ton message"></textarea>
+        <button class="envoyer" id="envoyer" type="submit" aria-label="Envoyer"><svg><use href="#i-fleche-haut"/></svg></button>
+      </form>
+      <div class="pied">Entrée pour envoyer · Maj+Entrée pour aller à la ligne</div>
+    </section>
+
+    <div class="pastille" id="pastille" role="status"><span id="pastille-texte">Connexion…</span><span class="point" id="pastille-point"></span></div>
+  </main>
+
+  <dialog id="parametres">
+    <form method="dialog" class="parametres">
+      <header>
+        <h2>Paramètres</h2>
+        <button class="icone" value="fermer" aria-label="Fermer"><svg><use href="#i-fermer"/></svg></button>
+      </header>
+      <label>Modèle par défaut<select id="defaut-modele"></select></label>
+      <label>Niveau de réflexion par défaut<select id="defaut-niveau"></select></label>
+      <p class="note">S'appliquent aux nouvelles conversations. Gardés dans ce navigateur.</p>
+      <div class="etats" id="etats"></div>
+    </form>
+  </dialog>
+</body>
+</html>
