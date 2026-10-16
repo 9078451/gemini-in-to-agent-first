@@ -313,11 +313,13 @@ async function envoyer() {
     });
     attente.replaceWith(bulle(message));
     signaler("Gemini prêt", VERT);
+    verifierEtat(); // Chrome et Google viennent de servir : l'état affiché se met à jour
   } catch (e) {
     attente.replaceWith(bulle({ role: "erreur", texte: e.message }));
     $("saisie").value = texte; // pour pouvoir le renvoyer
     ajusterSaisie();
     signaler(e.message === "Agent First n'est pas démarré." ? "Agent First arrêté" : "Erreur", ROUGE);
+    verifierEtat(); // met à jour l'état du compte (la pastille garde l'erreur tant que l'envoi est en cours)
     if (/n'est pas proposé/.test(e.message)) chargerModes();
   } finally {
     clearInterval(minuteur);
