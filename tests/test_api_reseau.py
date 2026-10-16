@@ -191,3 +191,16 @@ def test_cowork_inconnu_404(monte):
     client, *_ = monte()
     assert client.get("/v1/cowork/absent").status_code == 404
     assert client.post("/v1/cowork/absent/messages", json={"text": "x"}).status_code == 404
+
+
+def test_cowork_agent_first_vaut_le_modele_courant(monte, tmp_path):
+    client, _, historique, _ = monte([FINI])
+    identifiant = client.post("/v1/cowork", json={"folder": str(tmp_path), "request": "x", "model": "agent-first"}).json()["id"]
+    assert historique.conversation(identifiant).modele is None
+
+
+def test_cowork_decision_sans_demande_409(monte, tmp_path):
+    client, *_ = monte([FINI])
+    identifiant = client.post("/v1/cowork", json={"folder": str(tmp_path), "request": "x"}).json()["id"]
+    evenements_sse(client.get(f"/v1/cowork/{identifiant}/events"))
+    assert client.post(f"/v1/cowork/{identifiant}/decision", json={"step": 3, "approve": True}).status_code == 409

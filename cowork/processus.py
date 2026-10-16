@@ -90,7 +90,8 @@ class GestionnaireProcessus:
             popen = subprocess.Popen(
                 self._commande(commande),
                 cwd=self._dossier,
-                env={**os.environ, "PYTHONUTF8": "1"},
+                # PYTHONUNBUFFERED : sans lui, les print() d'un serveur Python restent en mémoire (sortie en tube)
+                env={**os.environ, "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1"},
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,

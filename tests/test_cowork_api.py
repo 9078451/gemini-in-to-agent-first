@@ -422,3 +422,92 @@ def test_arreter_coupe_un_lot(tmp_path):
     evs = evenements(service, conv.id)
     assert len(lances) < 5 and fin(evs)["type"] == "arret"
     file.arreter()
+
+
+def test_decision_sur_la_mauvaise_etape_refusee(tmp_path):
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    client, file, historique, service = monter(tmp_path, [bloc({"action": "delete", "path": "a.txt"}), FINI])
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    collectes = []
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "supprime"})
+    fil = threading.Thread(target=drainer_dans, args=(service, conv.id, collectes))
+    fil.start()
+    demande = attendre(collectes, "demande")
+    r = client.post(f"/api/cowork/{conv.id}/decision", json={"etape": demande["etape"] + 7, "reponse": "continuer"})
+    assert r.status_code == 409 and (tmp_path / "a.txt").exists()
+    assert client.post(f"/api/cowork/{conv.id}/decision", json={"etape": demande["etape"], "reponse": "continuer"}).status_code == 200
+    fil.join(timeout=5)
+    assert not (tmp_path / "a.txt").exists()
+    file.arreter()
+
+
+def test_decision_tres_rapide_pas_perdue(tmp_path):
+    # Un programme qui répond dès qu'il voit « demande » ne doit pas voir son accord effacé.
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    client, file, historique, service = monter(tmp_path, [bloc({"action": "delete", "path": "a.txt"}), FINI], delai_accord=3)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    vus = []
+
+    def repondre_aussitot():
+        for ligne in service.flux(conv.id):
+            if ligne.startswith("data:"):
+                ev = json.loads(ligne[5:])
+                vus.append(ev)
+                if ev["type"] == "demande":
+                    service.decider(conv.id, ev["etape"], "continuer", False)
+
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "supprime"})
+    fil = threading.Thread(target=repondre_aussitot)
+    fil.start()
+    fil.join(timeout=10)
+    assert fin(vus)["type"] == "termine" and not (tmp_path / "a.txt").exists()
+    file.arreter()
+
+
+def test_processus_publie_avec_sa_liste(tmp_path):
+    diffuseur = Diffuseur()
+    abonne = diffuseur.abonner()
+    client, file, historique, service = monter(tmp_path, [bloc({"action": "start", "command": "python s.py"}), FINI],
+                                               diffuseur=diffuseur)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    lancer_tache(client, service, conv.id, "lance")
+    publies = []
+    while not abonne.empty():
+        publies.append(abonne.get())
+    processus = [e for e in publies if e["type"] == "processus"]
+    assert processus and all(isinstance(e.get("liste"), list) for e in processus)
+    service.arreter_tout()
+    file.arreter()
+
+
+def test_etats_en_cours_pour_le_flux_global(tmp_path):
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    client, file, historique, service = monter(tmp_path, [bloc({"action": "delete", "path": "a.txt"})])
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    collectes = []
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "supprime"})
+    fil = threading.Thread(target=drainer_dans, args=(service, conv.id, collectes))
+    fil.start()
+    attendre(collectes, "demande")
+    assert {"conversation_id": conv.id, "type": "statut", "statut": "waiting_approval"}.items() <= service.etats_en_cours()[0].items()
+    service.arreter(conv.id)
+    fil.join(timeout=5)
+    assert service.etats_en_cours() == []
+    file.arreter()
+
+
+def test_preparation_impossible_ne_bloque_pas_la_conversation(tmp_path):
+    def casse(*_):
+        raise RuntimeError("dossier illisible")
+
+    pilote = FauxPilote([FINI])
+    file = FileAttente(lambda: pilote)
+    file.demarrer()
+    historique = Historique(tmp_path / "historique.db")
+    service = ServiceCowork(file, historique, casse, REGLAGES, fabrique_processus)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    service.demarrer(conv.id, str(tmp_path), None, "x", None, None)
+    evs = evenements(service, conv.id)
+    assert fin(evs)["type"] == "erreur" and "dossier illisible" in fin(evs)["corps"]
+    assert not service.en_cours(conv.id)
+    file.arreter()

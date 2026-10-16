@@ -99,3 +99,62 @@ def test_visite_reponse_invalide():
     r = visite(f"http://127.0.0.1:{serveur.getsockname()[1]}/")
     serveur.close()
     assert r.ok is False and "connection" in r.corps
+
+
+class _Flux(BaseHTTPRequestHandler):
+    """Comme un serveur SSE : envoie un peu, puis ne ferme jamais. Ou redirige, ou envoie 1 Mo."""
+
+    def do_GET(self):
+        if self.path == "/redir":
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{self.server.interdit}/api/api-reseau")
+            self.end_headers()
+            return
+        if self.path == "/gros":
+            corps = b"x" * 1_000_000
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(corps)))
+            self.end_headers()
+            self.wfile.write(corps)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        self.wfile.write(b"data: bonjour\n\n")
+        self.wfile.flush()
+        import time
+        time.sleep(30)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def port_flux():
+    serveur = ThreadingHTTPServer(("127.0.0.1", 0), _Flux)
+    serveur.daemon_threads = True
+    serveur.interdit = 8765
+    threading.Thread(target=serveur.serve_forever, daemon=True).start()
+    yield serveur.server_address[1]
+    serveur.shutdown()
+    serveur.server_close()
+
+
+def test_visite_flux_sans_fin_ne_bloque_pas(port_flux):
+    import time
+
+    debut = time.monotonic()
+    r = visiter(f"http://127.0.0.1:{port_flux}/sse", "GET", None, frozenset(), 1.0, 8000)
+    assert time.monotonic() - debut < 4
+    assert r.ok and r.corps.startswith("HTTP 200") and "data: bonjour" in r.corps
+
+
+def test_visite_ne_suit_pas_les_redirections(port_flux):
+    r = visiter(f"http://127.0.0.1:{port_flux}/redir", "GET", None, frozenset({8765}), 2.0, 8000)
+    assert r.corps.startswith("HTTP 302") and "Location: http://127.0.0.1:8765/api/api-reseau" in r.corps
+    assert "not followed" in r.corps
+
+
+def test_visite_corps_borne(port_flux):
+    r = visiter(f"http://127.0.0.1:{port_flux}/gros", "GET", None, frozenset(), 5.0, 1000)
+    assert r.ok and len(r.corps) < 1200 and "1000000 bytes" in r.corps

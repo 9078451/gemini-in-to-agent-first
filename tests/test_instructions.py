@@ -69,3 +69,14 @@ def test_arborescence_limite(tmp_path):
 
 def test_arborescence_vide(tmp_path):
     assert arborescence(tmp_path, 150) == "(empty)"
+
+
+def test_arborescence_boucle_de_jonction(tmp_path):
+    import pytest
+
+    _winapi = pytest.importorskip("_winapi")
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "f.txt").write_text("x")
+    _winapi.CreateJunction(str(tmp_path / "a"), str(tmp_path / "a" / "boucle"))
+    texte = arborescence(tmp_path, 150)  # ne doit pas finir en RecursionError
+    assert texte.startswith("a/\n  boucle/")

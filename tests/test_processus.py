@@ -109,3 +109,13 @@ def test_powershell_par_defaut(tmp_path):
         assert r.ok and "serveur prêt" in r.corps
     finally:
         g.arreter_tout()
+
+
+def test_sortie_d_un_print_sans_flush(tmp_path):
+    # Python garde ses print() en mémoire quand sa sortie est un tube : un serveur semblait muet.
+    g = GestionnaireProcessus(tmp_path, 1, 1.0, 8000, commande=lambda texte: [sys.executable, "-c", texte])
+    try:
+        r = g.demarrer("print('Serving on 8000')\nimport time\ntime.sleep(30)")
+        assert "Serving on 8000" in r.corps
+    finally:
+        g.arreter_tout()

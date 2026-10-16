@@ -60,6 +60,7 @@ class _Session:
         self.accord = threading.Event()
         self.reponse_accord = False
         self.action_en_attente = ""
+        self.etape_en_attente: int | None = None  # n° de la demande d'accord ouverte
         self.arret = threading.Event()
         self.raison_arret = ""
 
@@ -108,10 +109,16 @@ class ServiceCowork:
             session = _Session()
             self._sessions[conversation_id] = session
             self._ranger()
-        dossier_travail = Path(dossier)
-        processus = self._processus_de(conversation_id, dossier_travail)
-        executeur = self._fabrique_executeur(dossier_travail, processus, session.arret)
-        session.tache, message = self._preparer(conversation_id, dossier_travail, texte, processus)
+        try:
+            dossier_travail = Path(dossier)
+            processus = self._processus_de(conversation_id, dossier_travail)
+            executeur = self._fabrique_executeur(dossier_travail, processus, session.arret)
+            session.tache, message = self._preparer(conversation_id, dossier_travail, texte, processus)
+        except Exception as e:  # sans cela, la conversation restait « en cours » (409) jusqu'au redémarrage
+            journal.exception("Tâche Cowork impossible à préparer")
+            self._emettre(conversation_id, session, {"type": "erreur", "corps": f"Impossible de préparer la tâche : {e}"})
+            self._finir(session)
+            return
         self._emettre(conversation_id, session, {"type": "statut", "statut": "queued"})
 
         def travail(pilote) -> None:
@@ -148,9 +155,7 @@ class ServiceCowork:
                 journal.exception("Erreur dans la tâche Cowork")
                 self._emettre(conversation_id, session, {"type": "erreur", "corps": str(e)})
             finally:
-                with session.condition:
-                    session.fini = True
-                    session.condition.notify_all()
+                self._finir(session)
 
         self._file.soumettre(travail)
 
@@ -232,14 +237,32 @@ class ServiceCowork:
             "bilan": fin.get("bilan"),
         }
 
-    def decider(self, conversation_id: str, etape: int, reponse: str, toujours: bool) -> None:
+    def decider(self, conversation_id: str, etape: int, reponse: str, toujours: bool) -> bool:
+        """Répond à la demande d'accord n° `etape`. False s'il n'y en a pas d'ouverte sous ce
+        numéro : une réponse en retard ne doit pas valoir pour une autre action dangereuse."""
         session = self._sessions.get(conversation_id)
         if session is None or session.fini:
-            return
-        session.reponse_accord = reponse == "continuer"
-        if toujours and session.reponse_accord:
-            self._toujours.setdefault(conversation_id, set()).add(session.action_en_attente)
-        session.accord.set()
+            return False
+        with session.condition:
+            if session.etape_en_attente is None or etape != session.etape_en_attente:
+                return False
+            session.etape_en_attente = None
+            session.reponse_accord = reponse == "continuer"
+            if toujours and session.reponse_accord:
+                self._toujours.setdefault(conversation_id, set()).add(session.action_en_attente)
+            session.accord.set()
+        return True
+
+    def etats_en_cours(self) -> list[dict]:
+        """Le statut de chaque tâche non finie : le flux global de l'app commence par là
+        (une demande d'accord déjà en attente doit se voir dès l'ouverture)."""
+        etats = []
+        for conversation_id, session in list(self._sessions.items()):
+            with session.condition:
+                if not session.fini:
+                    etats.append({"conversation_id": conversation_id, "type": "statut", "statut": session.statut,
+                                  "etape": len(session.evenements)})
+        return etats
 
     def arreter(self, conversation_id: str) -> None:
         session = self._sessions.get(conversation_id)
@@ -286,14 +309,21 @@ class ServiceCowork:
     def _demander(self, conversation_id: str, session: _Session, action: Action) -> bool:
         if action.nom in self._toujours.get(conversation_id, set()):
             return True
-        session.action_en_attente = action.nom
-        session.accord.clear()
+        # L'accord a été préparé (effacé, étape notée) à l'émission de « demande » : une réponse
+        # arrivée entre-temps n'est pas perdue.
         if not session.accord.wait(self._delai_accord):
             session.raison_arret = f"pas de réponse à la demande d'accord en {self._delai_accord / 60:.0f} min"
             session.arret.set()
+        session.etape_en_attente = None
         if session.arret.is_set():
             return False
         return session.reponse_accord
+
+    @staticmethod
+    def _finir(session: _Session) -> None:
+        with session.condition:
+            session.fini = True
+            session.condition.notify_all()
 
     def _emettre(self, conversation_id: str, session: _Session, evenement: dict) -> None:
         if evenement["type"] == "demande" and evenement.get("action") in self._toujours.get(conversation_id, set()):
@@ -304,6 +334,10 @@ class ServiceCowork:
             evenement = {**evenement, "bilan": session.tache.bilan(self.processus(conversation_id))}
         with session.condition:
             evenement = {**evenement, "etape": len(session.evenements)}
+            if type_ == "demande":  # préparé avant d'être visible : une réponse immédiate compte
+                session.accord.clear()
+                session.action_en_attente = evenement.get("action", "")
+                session.etape_en_attente = evenement["etape"]
             if type_ not in NON_ENREGISTRES:
                 try:
                     self._historique.ajouter_etape(conversation_id, evenement)
@@ -321,9 +355,10 @@ class ServiceCowork:
             session.condition.notify_all()
             statut = session.statut
         if self._diffuseur is not None:
-            self._diffuseur.publier(
-                {"conversation_id": conversation_id, "type": type_, "etape": evenement["etape"], "statut": statut}
-            )
+            publie = {"conversation_id": conversation_id, "type": type_, "etape": evenement["etape"], "statut": statut}
+            if "liste" in evenement:  # processus : l'en-tête de l'app a besoin de la liste
+                publie["liste"] = evenement["liste"]
+            self._diffuseur.publier(publie)
 
     def _derniere_tache_enregistree(self, conversation_id: str) -> list[dict]:
         """Les étapes enregistrées depuis le dernier message de l'utilisateur."""

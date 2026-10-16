@@ -177,8 +177,9 @@ def creer_api_reseau(
         if refus:
             raise HTTPException(400, refus)
         niveau = niveau_depuis_effort(demande.reasoning_effort)
+        modele = demande.model if demande.model and demande.model != MODELE_PAR_DEFAUT else None
         dossier = str(Path(demande.folder).resolve())
-        conversation = historique.creer(demande.model, niveau, "cowork", dossier, source="api")
+        conversation = historique.creer(modele, niveau, "cowork", dossier, source="api")
         return _lancer(conversation.id, demande.request)
 
     @v1.post("/cowork/{identifiant}/messages")
@@ -214,7 +215,8 @@ def creer_api_reseau(
     @v1.post("/cowork/{identifiant}/decision")
     def cowork_decision(identifiant: str, decision: DecisionTache):
         _tache_connue(identifiant)
-        cowork.decider(identifiant, decision.step, "continuer" if decision.approve else "refuser", decision.always)
+        if not cowork.decider(identifiant, decision.step, "continuer" if decision.approve else "refuser", decision.always):
+            raise HTTPException(409, f"No pending approval for step {decision.step}.")
         return {"ok": True}
 
     @v1.post("/cowork/{identifiant}/stop")

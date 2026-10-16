@@ -7,6 +7,7 @@ from typing import Callable, Literal
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
@@ -82,8 +83,12 @@ def creer_app(
     cache_modes: CacheModes | None = None,
     garde_api: GardeCle | None = None,
     adresse_api: str | None = None,
+    hotes_autorises: list[str] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Agent First")
+    if hotes_autorises:
+        # Une page web ne doit pas pouvoir joindre l'app par « reliure DNS » (et lire la clé de l'API).
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=hotes_autorises)
     modes = cache_modes or CacheModes(file, chrome_lance, modes_par_defaut)
 
     @app.exception_handler(RequestValidationError)
@@ -150,11 +155,12 @@ def creer_app(
     def evenements():
         if diffuseur is None:
             return erreur(404, "Pas de flux d'évènements.")
-        return StreamingResponse(diffuseur.flux(), media_type="text/event-stream")
+        return StreamingResponse(diffuseur.flux(cowork.etats_en_cours if cowork else None), media_type="text/event-stream")
 
     @app.post("/api/cowork/{identifiant}/decision")
     def cowork_decision(identifiant: str, decision: Decision):
-        cowork.decider(identifiant, decision.etape, decision.reponse, decision.toujours)
+        if not cowork.decider(identifiant, decision.etape, decision.reponse, decision.toujours):
+            return erreur(409, "Aucune demande d'accord en attente pour cette étape.")
         return {"ok": True}
 
     @app.post("/api/cowork/{identifiant}/arreter")

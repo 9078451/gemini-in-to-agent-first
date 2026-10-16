@@ -608,7 +608,7 @@ function creerRenduCowork(conteneur, interactif) {
   return (ev) => {
     if (ev.type === "statut") return;
     if (ev.type === "processus") {
-      if (interactif) dessinerProcessus(ev.liste);
+      if (interactif && ev.liste) dessinerProcessus(ev.liste);
       return;
     }
     // La tâche avance : une demande restée ouverte a été tranchée ailleurs (API, autre fenêtre).
@@ -739,6 +739,7 @@ function finirCowork() {
   $("form-saisie").classList.remove("occupe");
   $("arreter").hidden = true;
   chargerConversations();
+  if (etat.mode === "cowork" && etat.courante) chargerProcessus(etat.courante); // les serveurs lancés restent affichés
 }
 
 async function arreterTache() {
@@ -795,7 +796,7 @@ function ecouterEvenements() {
   source.onmessage = (message) => {
     const ev = JSON.parse(message.data);
     if (ev.type === "processus") {
-      if (ev.conversation_id === etat.courante) dessinerProcessus(ev.liste);
+      if (ev.liste && ev.conversation_id === etat.courante) dessinerProcessus(ev.liste);
       return;
     }
     const id = ev.conversation_id;

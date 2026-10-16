@@ -7,6 +7,7 @@ connecté au compte Google de l'utilisateur.
 """
 import http.client
 import json
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
@@ -32,14 +33,53 @@ def visiter(
     requete = urllib.request.Request(url, data=donnees, method=(methode or "GET").upper())
     if donnees:
         requete.add_header("Content-Type", "application/json" if _est_json(corps) else "text/plain; charset=utf-8")
-    ouvreur = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # localhost : jamais via un proxy
+    ouvreur = urllib.request.build_opener(urllib.request.ProxyHandler({}), _SansRedirection())  # jamais via un proxy
+    fin = time.monotonic() + delai
     try:
         with ouvreur.open(requete, timeout=delai) as reponse:
-            return _resultat(reponse.status, reponse.headers, reponse.read(), True, taille_max)
+            brut, complet = _lire_borne(reponse, taille_max * 4, fin)
+            return _resultat(reponse.status, reponse.headers, brut, complet, True, taille_max)
     except urllib.error.HTTPError as e:
-        return _resultat(e.code, e.headers, e.read(), False, taille_max)
+        if 300 <= e.code < 400:  # une redirection n'est pas suivie : elle pourrait viser un port interdit
+            cible = e.headers.get("Location", "?")
+            return Resultat(True, f"HTTP {e.code} redirect\nLocation: {cible} (redirects are not followed: visit it yourself if it is local)")
+        brut, complet = _lire_borne(e, taille_max * 4, fin)
+        return _resultat(e.code, e.headers, brut, complet, False, taille_max)
     except (urllib.error.URLError, OSError, http.client.HTTPException) as e:  # HTTPException : réponse qui n'est pas du HTTP
         return Resultat(False, f"connection failed: {getattr(e, 'reason', e)}")
+
+
+class _SansRedirection(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _lire_borne(reponse, limite: int, fin: float) -> tuple[bytes, bool]:
+    """Lit au plus `limite` octets avant l'heure `fin` : un flux sans fin (SSE…) ou un
+    très gros corps ne doit pas bloquer la tâche. Renvoie (octets, lu en entier ?)."""
+    morceaux, total = [], 0
+    while total < limite:
+        reste = fin - time.monotonic()
+        if reste <= 0:
+            return b"".join(morceaux), False
+        _regler_attente(reponse, reste)
+        try:
+            morceau = reponse.read1(min(65536, limite - total))
+        except (TimeoutError, OSError):
+            return b"".join(morceaux), False
+        if not morceau:
+            return b"".join(morceaux), True
+        morceaux.append(morceau)
+        total += len(morceau)
+    return b"".join(morceaux), False
+
+
+def _regler_attente(reponse, secondes: float) -> None:
+    """Chaque lecture attend au plus le temps restant (sinon : le délai d'ouverture, à chaque fois)."""
+    try:
+        reponse.fp.raw._sock.settimeout(max(0.05, secondes))
+    except AttributeError:
+        pass  # objet sans socket accessible : le délai d'ouverture s'applique
 
 
 def _est_json(texte: str) -> bool:
@@ -50,8 +90,12 @@ def _est_json(texte: str) -> bool:
         return False
 
 
-def _resultat(code: int, entetes, brut: bytes, ok: bool, taille_max: int) -> Resultat:
+def _resultat(code: int, entetes, brut: bytes, complet: bool, ok: bool, taille_max: int) -> Resultat:
     texte = brut.decode(entetes.get_content_charset() or "utf-8", errors="replace")
     if len(texte) > taille_max:
         texte = texte[:taille_max] + "\n…(cut)"
-    return Resultat(ok, f"HTTP {code} {entetes.get_content_type()} {len(brut)} bytes\n{texte}")
+    elif not complet:
+        texte += "\n…(stopped reading: the response did not end in time)"
+    annonce = entetes.get("Content-Length")
+    taille = f"{annonce} bytes" if annonce else f"{len(brut)}{'' if complet else '+'} bytes"
+    return Resultat(ok, f"HTTP {code} {entetes.get_content_type()} {taille}\n{texte}")

@@ -6,7 +6,7 @@ quand même se voir. Chaque abonné a sa file ; un abonné trop lent perd des
 import json
 import queue
 import threading
-from typing import Iterator
+from typing import Callable, Iterator
 
 ATTENTE_PING = 15.0  # s : un commentaire SSE régulier garde la connexion et révèle un navigateur parti
 
@@ -36,9 +36,13 @@ class Diffuseur:
             except queue.Full:
                 pass  # abonné qui ne lit plus : il rattrapera en rechargeant
 
-    def flux(self) -> Iterator[str]:
+    def flux(self, present: Callable[[], list[dict]] | None = None) -> Iterator[str]:
+        """Les évènements à venir, précédés de l'état `present` (tâches en cours) : un abonné
+        qui arrive pendant une demande d'accord la voit tout de suite."""
         file = self.abonner()
         try:
+            for evenement in present() if present else []:
+                yield f"data: {json.dumps(evenement, ensure_ascii=False)}\n\n"
             while True:
                 try:
                     evenement = file.get(timeout=ATTENTE_PING)

@@ -94,6 +94,7 @@ def main() -> None:
         file, historique, config.DELAI_AGENT, chrome.est_lance, par_defaut,
         config.DOSSIER_WEB, cowork=cowork, choisir_dossier=choisir_dossier,
         diffuseur=diffuseur, cache_modes=cache_modes, garde_api=garde, adresse_api=adresse_api,
+        hotes_autorises=[config.HOTE_AGENT, "localhost"],
     )
     if args.ouvrir:
         url = f"http://{config.HOTE_AGENT}:{config.PORT_AGENT}/"

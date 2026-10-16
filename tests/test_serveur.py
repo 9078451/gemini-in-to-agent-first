@@ -243,3 +243,25 @@ def test_api_reseau_infos(pilote, tmp_path):
 
 def test_api_reseau_inactive(client):
     assert client.get("/api/api-reseau").json() == {"active": False, "adresse": None, "cle": None}
+
+
+def test_flux_global_commence_par_l_etat_present():
+    import itertools
+
+    from agent_first.diffuseur import Diffuseur
+
+    diffuseur = Diffuseur()
+    present = [{"conversation_id": "c1", "type": "statut", "statut": "waiting_approval"}]
+    premier = next(itertools.islice(diffuseur.flux(lambda: present), 1))
+    assert '"waiting_approval"' in premier and premier.startswith("data: ")
+
+
+def test_hote_inconnu_refuse(pilote, tmp_path):
+    # Protège de la « reliure DNS » : une page web ne doit pas pouvoir lire la clé de l'API.
+    file = FileAttente(lambda: pilote)
+    file.demarrer()
+    app = creer_app(file, Historique(tmp_path / "historique.db"), 2.0, lambda: True, PAR_DEFAUT,
+                    hotes_autorises=["127.0.0.1", "localhost"])
+    assert TestClient(app, base_url="http://evil.example").get("/api/etat").status_code == 400
+    assert TestClient(app, base_url="http://127.0.0.1:8765").get("/api/etat").status_code == 200
+    file.arreter()

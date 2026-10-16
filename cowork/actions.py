@@ -27,6 +27,7 @@ __all__ = ["Executeur", "Resultat", "HorsDossier", "lancer_powershell", "tuer_ar
 
 LIGNES_DIFF_MAX = 200
 LIGNES_PASSAGE_MAX = 5000  # au-delà, on ne cherche pas de passage proche
+CANDIDATES_PASSAGE = 15  # fenêtres comparées finement pour trouver le passage proche
 
 
 class HorsDossier(Exception):
@@ -280,17 +281,39 @@ def _diff(avant: str, apres: str) -> str:
     return "\n".join(lignes)
 
 
+def _sans_espaces(ligne: str) -> str:
+    return " ".join(ligne.split())
+
+
 def _passage_proche(texte: str, cherche: str) -> str:
     """Le passage du fichier qui ressemble le plus à `cherche` (même nombre de lignes),
     pour que Gemini corrige son « old » du premier coup."""
     lignes = texte.splitlines()[:LIGNES_PASSAGE_MAX]
-    taille = max(1, len(cherche.splitlines()))
+    cible = [_sans_espaces(l) for l in cherche.splitlines()] or [_sans_espaces(cherche)]
+    taille = len(cible)
+    normales = [_sans_espaces(l) for l in lignes]
+    nb = max(1, len(lignes) - taille + 1)
+    # Comparer chaque fenêtre caractère par caractère prenait jusqu'à 30 s : on ne compare
+    # finement que quelques fenêtres candidates.
+    # 1) celles qui partagent le plus de lignes avec le passage cherché (espaces ignorés) ;
+    presentes = {l for l in cible if l}
+    communes = [1 if l in presentes else 0 for l in normales]
+    score = sum(communes[:taille])
+    scores = [score]
+    for i in range(1, nb):
+        score += communes[i + taille - 1] - communes[i - 1]
+        scores.append(score)
+    candidates = sorted(range(nb), key=lambda i: -scores[i])[:CANDIDATES_PASSAGE] if max(scores) > 0 else []
+    # 2) celles qui commencent par une ligne proche de la première ligne cherchée (faute de frappe).
+    premiere = next((l for l in cible if l), "")
+    if premiere:
+        proches = set(difflib.get_close_matches(premiere, normales[:nb], n=CANDIDATES_PASSAGE, cutoff=0.6))
+        candidates += [i for i in range(nb) if normales[i] in proches][:CANDIDATES_PASSAGE]
     meilleur, debut = 0.0, 0
-    for i in range(max(1, len(lignes) - taille + 1)):
-        comparaison = SequenceMatcher(None, cherche, "\n".join(lignes[i : i + taille]), autojunk=False)
-        if comparaison.quick_ratio() <= meilleur:
-            continue
-        ratio = comparaison.ratio()
+    for i in dict.fromkeys(candidates):
+        # ressemblance moyenne, ligne en face de ligne : rapide, et tolère les fautes de frappe
+        fenetre = normales[i : i + taille]
+        ratio = sum(SequenceMatcher(None, a, b).ratio() for a, b in zip(cible, fenetre)) / taille
         if ratio > meilleur:
             meilleur, debut = ratio, i
     if meilleur < 0.5:

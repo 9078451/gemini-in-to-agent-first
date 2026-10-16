@@ -239,3 +239,21 @@ def test_executeur_transmet_l_arret(tmp_path):
     ex = Executeur(tmp_path, 5, 8000, lancer=lambda texte, dossier, delai, arret=None: recus.append(arret) or (0, "x"), arret=arret)
     ex.executer(Action("run", {"command": "dir"}))
     assert recus == [arret]
+
+
+def test_passage_proche_rapide_sur_un_gros_fichier(ex, tmp_path):
+    import time
+
+    lignes = [f"    valeur_{i} = calcul({i}, 'texte {i}')" for i in range(5000)]
+    (tmp_path / "gros.py").write_text("\n".join(lignes) + "\n", encoding="utf-8")
+    cherche = "\n".join(l.replace("    ", "  ") for l in lignes[2000:2040])  # mauvaise indentation
+    debut = time.monotonic()
+    r = ex.executer(Action("edit", {"path": "gros.py", "old": cherche, "new": "x"}))
+    assert time.monotonic() - debut < 2
+    assert r.ok is False and "Closest passage (lines 2001-2040)" in r.corps
+
+
+def test_passage_proche_avec_une_faute(ex, tmp_path):
+    (tmp_path / "a.py").write_text("def calculer_total(prix, quantite):\n    return prix * quantite\n", encoding="utf-8")
+    r = ex.executer(Action("edit", {"path": "a.py", "old": "def calculer_totale(prix, quantité):", "new": "x"}))
+    assert "Closest passage (lines 1-1)" in r.corps
