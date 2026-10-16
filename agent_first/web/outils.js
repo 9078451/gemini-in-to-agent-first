@@ -60,3 +60,8 @@ export function metaMessage(message) {
     .filter(Boolean)
     .join(" · ");
 }
+
+// « C:\Users\nom\Desktop\site » → « ~\Desktop\site » ; les autres chemins restent tels quels.
+export function cheminCourt(chemin) {
+  return chemin.replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/i, "~");
+}

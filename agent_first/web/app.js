@@ -1,7 +1,7 @@
 // agent.first — état, affichage et événements de l'app.
 import { appeler } from "./api.js";
-import { formaterDate, formaterDuree, groupesParDate, metaMessage, titreDepuis } from "./outils.js";
-import { libelleEtape } from "./outils_cowork.js";
+import { cheminCourt, formaterDate, formaterDuree, groupesParDate, metaMessage, titreDepuis } from "./outils.js";
+import { libelleEtape, nombreLignes, resumeDiff } from "./outils_cowork.js";
 
 const $ = (id) => document.getElementById(id);
 const CLE_DEFAUT = "agent.first.defaut";
@@ -9,7 +9,7 @@ const CLE_BARRE = "agent.first.barre-repliee";
 const CLE_DOSSIER = "agent.first.dossier";
 const FIN_DE_TACHE = ["termine", "limite", "arret", "erreur"];
 const VERT = "var(--vert)";
-const ORANGE = "var(--orange)";
+const ORANGE = "var(--ambre)";
 const ROUGE = "var(--rouge)";
 const GRIS = "var(--texte-3)";
 const ETATS_GOOGLE = {
@@ -83,7 +83,7 @@ function defilerEnBas() {
 function ajusterSaisie() {
   const saisie = $("saisie");
   saisie.style.height = "auto";
-  saisie.style.height = `${Math.min(saisie.scrollHeight, 200)}px`;
+  saisie.style.height = `${Math.min(saisie.scrollHeight, 220)}px`;
 }
 
 // ---------- état d'Agent First et de Gemini ----------
@@ -92,13 +92,13 @@ async function verifierEtat() {
   try {
     etat.serveur = await appeler("GET", "/api/etat");
     const [texte, couleur] = ETATS_GOOGLE[String(etat.serveur.google)];
-    $("etat-google").textContent = texte;
-    $("etat-google").style.color = couleur;
+    $("etat-google").textContent = `Gemini · ${texte}`;
+    $("point-google").style.background = couleur;
     if (!etat.occupe) signaler("Gemini prêt", VERT);
   } catch {
     etat.serveur = null;
-    $("etat-google").textContent = "inconnu";
-    $("etat-google").style.color = GRIS;
+    $("etat-google").textContent = "Agent First arrêté";
+    $("point-google").style.background = ROUGE;
     if (!etat.occupe) signaler("Agent First arrêté", ROUGE);
   }
 }
@@ -123,49 +123,45 @@ function choisirReglages(modele, niveau) {
   dessinerReglages();
 }
 
+function optionsMenu(liste, choisi, choisir) {
+  return liste.map((o) => {
+    const option = element("button", "option");
+    option.type = "button";
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", String(o.nom === choisi));
+    option.append(element("span", "option-nom", o.nom), element("span", "option-desc", o.description));
+    option.addEventListener("click", () => {
+      choisir(o.nom);
+      fermerMenus();
+      dessinerReglages();
+    });
+    return option;
+  });
+}
+
 function dessinerReglages() {
   $("nom-modele").textContent = etat.modele ?? "Modèle";
-  $("menu-modeles").replaceChildren(
-    ...etat.modes.modeles.map((m) => {
-      const option = element("button", "option");
-      option.type = "button";
-      option.setAttribute("role", "option");
-      option.setAttribute("aria-selected", String(m.nom === etat.modele));
-      option.append(element("span", "option-nom", m.nom), element("span", "option-desc", m.description));
-      option.addEventListener("click", () => {
-        etat.modele = m.nom;
-        fermerMenu();
-        dessinerReglages();
-      });
-      return option;
-    }),
-  );
-  $("niveaux").hidden = !etat.modes.niveaux.length;
-  $("niveaux").replaceChildren(
-    ...etat.modes.niveaux.map((n) => {
-      const bouton = element("button", n.nom === etat.niveau ? "actif" : "", n.nom);
-      bouton.type = "button";
-      bouton.title = n.description;
-      bouton.setAttribute("role", "radio");
-      bouton.setAttribute("aria-checked", String(n.nom === etat.niveau));
-      bouton.addEventListener("click", () => {
-        etat.niveau = n.nom;
-        dessinerReglages();
-      });
-      return bouton;
-    }),
-  );
+  $("nom-niveau").textContent = etat.niveau ? `Réflexion ${etat.niveau}` : "Réflexion";
+  $("menu-modeles").replaceChildren(...optionsMenu(etat.modes.modeles, etat.modele, (nom) => (etat.modele = nom)));
+  $("menu-niveaux").replaceChildren(...optionsMenu(etat.modes.niveaux, etat.niveau, (nom) => (etat.niveau = nom)));
+  $("bouton-niveau").parentElement.hidden = !etat.modes.niveaux.length;
 }
 
-function basculerMenu() {
-  const menu = $("menu-modeles");
-  menu.hidden = !menu.hidden;
-  $("bouton-modele").setAttribute("aria-expanded", String(!menu.hidden));
+// bouton → menu qu'il ouvre, au-dessus de la zone de saisie
+const MENUS = { "bouton-modele": "menu-modeles", "bouton-niveau": "menu-niveaux" };
+
+function basculerMenu(bouton) {
+  const ouvrir = $(MENUS[bouton]).hidden;
+  fermerMenus();
+  $(MENUS[bouton]).hidden = !ouvrir;
+  $(bouton).setAttribute("aria-expanded", String(ouvrir));
 }
 
-function fermerMenu() {
-  $("menu-modeles").hidden = true;
-  $("bouton-modele").setAttribute("aria-expanded", "false");
+function fermerMenus() {
+  for (const [bouton, menu] of Object.entries(MENUS)) {
+    $(menu).hidden = true;
+    $(bouton).setAttribute("aria-expanded", "false");
+  }
 }
 
 // ---------- barre latérale ----------
@@ -188,11 +184,15 @@ async function chargerConversations() {
   for (const groupe of groupesParDate(conversations)) {
     contenu.push(element("div", "groupe-titre", groupe.titre));
     for (const c of groupe.conversations) {
-      const bouton = element("button", "conversation", c.titre || "Sans titre");
+      const bouton = element("button", "conversation");
       bouton.type = "button";
-      bouton.title = c.titre;
+      bouton.title = c.mode === "cowork" ? `Cowork · ${c.titre}` : c.titre;
       bouton.classList.toggle("actif", c.id === etat.courante);
-      bouton.classList.toggle("cowork", c.mode === "cowork");
+      // marque : point qui pulse si une tâche Cowork tourne, sinon terminal pour Cowork, rien pour Chat
+      const marque = element("span", "marque");
+      if (c.id === etat.tache) marque.classList.add("en-cours");
+      else if (c.mode === "cowork") marque.append(icone("i-terminal"));
+      bouton.append(marque, element("span", "conversation-titre", c.titre || "Sans titre"));
       bouton.addEventListener("click", () => ouvrirConversation(c.id));
       contenu.push(bouton);
     }
@@ -213,15 +213,10 @@ function bulle(message) {
     return b;
   }
   if (message.role === "erreur") {
-    const b = element("div", "bulle erreur");
-    const meta = element("div", "meta");
-    meta.append(element("span", "point"), document.createTextNode("Erreur"));
-    b.append(meta, element("div", null, message.texte));
-    return b;
+    return element("div", "bulle erreur", `Erreur : ${message.texte}`);
   }
+  // Réponse de Gemini : du texte, sans carte ; le modèle et la durée en dessous, en petit.
   const carte = element("article", "bulle gemini");
-  const meta = element("div", "meta");
-  meta.append(element("span", "point"), document.createTextNode(metaMessage(message)));
   const contenu = element("div", "markdown");
   if (message.html) {
     contenu.innerHTML = message.html; // déjà nettoyé par Agent First (nh3)
@@ -241,26 +236,37 @@ function bulle(message) {
       signaler("Copie impossible", ROUGE);
     }
   });
-  const actions = element("div", "actions");
-  actions.append(copier);
-  carte.append(meta, contenu, actions);
+  const pied = element("div", "message-pied");
+  pied.append(element("span", null, metaMessage(message)), copier);
+  carte.append(contenu, pied);
   return carte;
 }
 
 function accueilDiscussion() {
   const bloc = element("div", "vide-discussion");
   if (etat.mode === "cowork") {
-    const titre = element("h1", null, "Travaille avec ");
-    titre.append(element("span", "accent", "Gemini"), document.createTextNode(" sur ton PC"));
-    const aide = etat.dossier
-      ? "Décris la tâche : Gemini lira, créera et modifiera des fichiers et lancera des commandes dans ce dossier."
-      : "Choisis d'abord le dossier de travail, puis décris la tâche.";
-    bloc.append(titre, element("p", null, aide));
+    bloc.append(element("h1", null, "Travaille avec Gemini sur ton PC"));
+    const aide = element("p");
+    if (etat.dossier) {
+      aide.append(
+        document.createTextNode("Gemini lit, crée et modifie des fichiers et lance des commandes dans "),
+        element("code", null, cheminCourt(etat.dossier)),
+        document.createTextNode(". Les actions risquées attendent ton accord."),
+      );
+      bloc.append(aide);
+    } else {
+      aide.textContent = "Choisis d'abord le dossier de travail, puis décris la tâche.";
+      const choisir = element("button", "bouton-secondaire", "Choisir un dossier");
+      choisir.type = "button";
+      choisir.addEventListener("click", choisirDossier);
+      bloc.append(aide, choisir);
+    }
     return bloc;
   }
-  const titre = element("h1", null, "Discute avec ");
-  titre.append(element("span", "accent", "Gemini"));
-  bloc.append(titre, element("p", null, "Choisis un modèle et un niveau de réflexion, puis pose ta question."));
+  bloc.append(
+    element("h1", null, "Discute avec Gemini"),
+    element("p", null, "Choisis le modèle et le niveau de réflexion sous la zone de saisie, puis pose ta question."),
+  );
   return bloc;
 }
 
@@ -360,52 +366,96 @@ async function envoyer() {
 
 // ---------- Cowork ----------
 
-function carteEtape(nomIcone, titre, detail, classe) {
-  const carte = element("div", classe);
-  const ligne = element("div", "etape-ligne");
-  ligne.append(icone(nomIcone), element("span", "etape-titre", titre));
-  if (detail) ligne.append(element("span", "etape-detail", detail));
-  carte.append(ligne);
-  return carte;
+// Une étape = une ligne monospace : point d'état, verbe (Write, Edit, Shell…), détail, info, et un
+// contenu qu'on peut déplier (diff, sortie de commande, fichier écrit).
+function ligneEtape(ev, interactif) {
+  const { verbe, detail } = libelleEtape(ev);
+  const etape = element("details", "etape");
+  etape.dataset.action = ev.action;
+  etape.dataset.detail = detail;
+  const resume = element("summary");
+  resume.title = detail;
+  const chevron = icone("i-chevron");
+  chevron.classList.add("chevron");
+  resume.append(
+    element("span", interactif ? "point-etat attente" : "point-etat"),
+    element("span", "etape-verbe", verbe),
+    element("span", "etape-detail", detail),
+    element("span", "etape-info"),
+    chevron,
+  );
+  etape.append(resume);
+  if (ev.action === "creer") {
+    resume.querySelector(".etape-info").textContent = nombreLignes(ev.champs?.contenu);
+    if (ev.champs?.contenu) ajouterCorps(etape, ev.champs.contenu, false);
+  }
+  return etape;
 }
 
-function ajouterResultat(carte, ev) {
-  const statut = element("span", `etape-statut ${ev.ok ? "ok" : "ko"}`);
-  statut.append(icone(ev.ok ? "i-check" : "i-alerte"));
-  carte.querySelector(".etape-ligne").append(statut);
+function ajouterCorps(etape, texte, ouvert) {
+  etape.querySelector(".etape-corps")?.remove();
+  const corps = element("div", "etape-corps", texte);
+  etape.append(corps);
+  etape.classList.add("a-corps");
+  etape.open = ouvert;
+  return corps;
+}
+
+function marquerEtape(etape, etatPoint) {
+  etape.querySelector(".point-etat").className = `point-etat ${etatPoint}`;
+}
+
+function ajouterResultat(etape, ev) {
+  marquerEtape(etape, ev.ok ? "ok" : "ko");
+  const info = etape.querySelector(".etape-info");
   if (ev.diff) {
-    const diff = element("div", "diff");
-    for (const ligne of ev.diff.split("\n")) diff.append(element("div", ligne.startsWith("-") ? "moins" : "plus", ligne));
-    carte.append(diff);
-  } else if (!ev.ok || ["commande", "lire", "chercher", "lister"].includes(carte.dataset.action)) {
-    const details = element("details");
-    details.open = !ev.ok;
-    details.append(element("summary", null, ev.ok ? "Voir le résultat" : "Erreur"), element("pre", null, ev.corps));
-    carte.append(details);
+    const { plus, moins } = resumeDiff(ev.diff);
+    info.replaceChildren(element("span", "plus", `+${plus}`), document.createTextNode(" "), element("span", "moins", `−${moins}`));
+    const corps = ajouterCorps(etape, "", true);
+    for (const ligne of ev.diff.split("\n")) corps.append(element("div", ligne.startsWith("-") ? "moins" : "plus", ligne));
+  } else if (!ev.ok) {
+    ajouterCorps(etape, ev.corps, true);
+  } else if (["commande", "lire", "chercher", "lister"].includes(etape.dataset.action)) {
+    if (etape.dataset.action === "lire") info.textContent = nombreLignes(ev.corps);
+    ajouterCorps(etape, ev.corps, false);
   }
+}
+
+// Évènement sans action (refus, autorisation d'office, limite, arrêt…) : une ligne de texte discrète.
+function noteEtape(ev, etatPoint) {
+  const { titre, detail } = libelleEtape(ev);
+  const note = element("div", "etape-note");
+  note.append(element("span", `point-etat ${etatPoint}`), element("span", null, titre));
+  if (detail) {
+    note.append(element("span", "etape-detail", detail));
+    note.title = detail;
+  }
+  return note;
 }
 
 function carteDemande(ev, detail, interactif) {
-  const carte = carteEtape("i-alerte", libelleEtape(ev).titre, "", "etape demande");
-  if (detail) carte.append(element("code", "demande-code", detail));
-  carte.append(element("div", "demande-raison", `Pourquoi : ${ev.raison}.`));
+  const carte = element("div", "accord");
+  const titre = element("div", "accord-titre");
+  titre.append(icone("i-alerte"), element("span", null, interactif ? "Autoriser cette action ?" : "Action soumise à ton accord"));
+  carte.append(titre);
+  if (detail) carte.append(element("code", "accord-code", detail));
+  const raison = ev.raison ? ev.raison[0].toUpperCase() + ev.raison.slice(1) : "Action jugée dangereuse";
+  carte.append(element("div", "accord-raison", `${raison}.`));
   if (!interactif) {
-    carte.append(element("div", "demande-decision", "Décision déjà prise."));
+    carte.append(element("div", "accord-decision", "Décision déjà prise."));
     return carte;
   }
-  const actions = element("div", "demande-actions");
+  const actions = element("div", "accord-actions");
   const toujours = element("label");
   const caseToujours = element("input");
   caseToujours.type = "checkbox";
-  toujours.append(caseToujours, document.createTextNode("Toujours autoriser ce type ici"));
+  toujours.append(caseToujours, document.createTextNode("Toujours autoriser ce type d'action ici"));
   const refuser = element("button", "bouton-refuser", "Refuser");
   refuser.type = "button";
-  const continuer = element("button", "bouton-continuer", "Continuer");
+  const continuer = element("button", "bouton-continuer", "Autoriser");
   continuer.type = "button";
   const decider = async (reponse) => {
-    actions.replaceWith(
-      element("div", "demande-decision", reponse === "continuer" ? "Tu as autorisé cette action." : "Tu as refusé cette action."),
-    );
+    actions.replaceWith(element("div", "accord-decision", reponse === "continuer" ? "Autorisée." : "Refusée."));
     signaler("Cowork travaille…", ORANGE);
     try {
       await appeler("POST", `/api/cowork/${etat.tache}/decision`, { etape: ev.etape, reponse, toujours: caseToujours.checked });
@@ -420,24 +470,32 @@ function carteDemande(ev, detail, interactif) {
   return carte;
 }
 
-// Affiche les étapes d'une tâche dans `conteneur` ; `interactif` = boutons d'accord actifs.
+// Affiche les étapes d'une tâche dans `conteneur` ; `interactif` = tâche en direct (boutons d'accord actifs).
+// Les lignes qui se suivent sont regroupées pour rester serrées, comme dans un terminal.
 function creerRenduCowork(conteneur, interactif) {
-  let derniereAction = null; // carte « action » qui recevra son résultat
+  let groupe = null;
+  let derniere = null; // ligne « action » qui recevra son résultat
+  const ajouterLigne = (ligne) => {
+    if (!groupe || conteneur.lastElementChild !== groupe) {
+      groupe = element("div", "groupe-etapes");
+      conteneur.append(groupe);
+    }
+    groupe.append(ligne);
+  };
   return (ev) => {
-    const { icone: nomIcone, titre, detail } = libelleEtape(ev);
     if (ev.type === "action") {
-      derniereAction = carteEtape(nomIcone, titre, detail, "etape");
-      derniereAction.dataset.action = ev.action;
-      derniereAction.dataset.detail = detail;
-      conteneur.append(derniereAction);
+      derniere = ligneEtape(ev, interactif);
+      ajouterLigne(derniere);
     } else if (ev.type === "resultat") {
-      if (derniereAction) ajouterResultat(derniereAction, ev);
+      if (derniere) ajouterResultat(derniere, ev);
     } else if (ev.type === "demande") {
-      conteneur.append(carteDemande(ev, derniereAction?.dataset.detail ?? "", interactif));
+      if (derniere) marquerEtape(derniere, "decision");
+      conteneur.append(carteDemande(ev, derniere?.dataset.detail ?? "", interactif));
     } else if (ev.type === "termine") {
       conteneur.append(bulle({ role: "gemini", texte: ev.resume.replace(/^TERMINÉ\s*:\s*/, ""), modele: null, niveau: null, duree: null }));
     } else {
-      conteneur.append(carteEtape(nomIcone, titre, detail, ev.type === "erreur" ? "etape info erreur-etape" : "etape info"));
+      if (ev.type === "refus" && derniere) marquerEtape(derniere, "ko");
+      ajouterLigne(noteEtape(ev, ["autorise", "erreur_format"].includes(ev.type) ? "decision" : "ko"));
     }
     defilerEnBas();
   };
@@ -469,7 +527,6 @@ async function envoyerCowork(texte) {
       etat.courante = conversation.id;
     }
     await appeler("POST", `/api/cowork/${etat.courante}/messages`, { texte });
-    chargerConversations(); // la conversation apparaît tout de suite dans la barre latérale
   } catch (e) {
     fil.append(bulle({ role: "erreur", texte: e.message }));
     $("saisie").value = texte; // pour pouvoir le renvoyer
@@ -485,12 +542,17 @@ function ecouterFlux(identifiant) {
   const ajouter = creerRenduCowork($("fil"), true);
   etat.tache = identifiant;
   $("arreter").hidden = false;
+  chargerConversations(); // la conversation apparaît tout de suite, avec son point « en cours »
   const source = new EventSource(`/api/cowork/${identifiant}/flux`);
   source.onmessage = (message) => {
     const ev = JSON.parse(message.data);
     if (etat.courante === identifiant) ajouter(ev); // seulement si la conversation est encore affichée
     if (FIN_DE_TACHE.includes(ev.type)) {
       source.close();
+      if (etat.courante === identifiant) {
+        // une étape restée sans résultat (tâche arrêtée) ne doit plus avoir l'air de tourner
+        $("fil").querySelectorAll(".point-etat.attente").forEach((p) => (p.className = "point-etat"));
+      }
       finirCowork();
       if (ev.type === "termine") signaler("Gemini prêt", VERT);
       else signaler(libelleEtape(ev).titre, ROUGE);
@@ -529,9 +591,9 @@ async function arreterTache() {
 
 function dessinerMode() {
   $("modes").querySelectorAll("button").forEach((b) => b.classList.toggle("actif", b.dataset.mode === etat.mode));
-  $("ligne-dossier").hidden = etat.mode !== "cowork";
-  $("nom-dossier").textContent = etat.dossier ?? "Choisir un dossier de travail";
-  $("choisir-dossier").title = etat.dossier ?? "Choisir le dossier de travail";
+  $("choisir-dossier").hidden = etat.mode !== "cowork";
+  $("nom-dossier").textContent = etat.dossier ? cheminCourt(etat.dossier) : "Choisir un dossier";
+  $("choisir-dossier").title = etat.dossier ? `${etat.dossier} (cliquer pour changer)` : "Choisir le dossier de travail";
   $("saisie").placeholder = etat.mode === "cowork" ? "Décris une tâche à Cowork…" : "Demande à Gemini…";
 }
 
@@ -586,20 +648,16 @@ async function chargerAccueil() {
 
 function dessinerCartes(s) {
   const cartes = [
-    ["Conversations", "Sur la période", "i-messages", String(s.conversations)],
-    ["Messages", "Envoyés à Gemini", "i-graphique", String(s.messages)],
+    ["Conversations", "sur la période", String(s.conversations)],
+    ["Messages", "envoyés à Gemini", String(s.messages)],
     // Un nom de modèle est plus long qu'un nombre : écrit plus petit pour tenir dans la carte.
-    ["Modèle favori", "Le plus utilisé", "i-etincelle", s.modele_favori ?? "—", "texte"],
-    ["Temps moyen", "Par réponse", "i-horloge", s.temps_moyen == null ? "—" : formaterDuree(s.temps_moyen)],
+    ["Modèle favori", "le plus utilisé", s.modele_favori ?? "—", "texte"],
+    ["Temps moyen", "par réponse", s.temps_moyen == null ? "—" : formaterDuree(s.temps_moyen)],
   ];
   $("cartes").replaceChildren(
-    ...cartes.map(([titre, sousTitre, nomIcone, valeur, style = ""]) => {
+    ...cartes.map(([titre, sousTitre, valeur, style = ""]) => {
       const carte = element("div", "carte");
-      const boite = element("div", "carte-valeur");
-      const rond = element("span", "rond");
-      rond.append(icone(nomIcone));
-      boite.append(rond, element("span", `nombre ${style}`, valeur));
-      carte.append(element("div", "carte-titre", titre), element("div", "carte-sous", sousTitre), boite);
+      carte.append(element("div", "carte-titre", titre), element("div", `nombre ${style}`, valeur), element("div", "carte-sous", sousTitre));
       return carte;
     }),
   );
@@ -628,7 +686,7 @@ function dessinerLignes(conversations, recherche) {
       supprimer.setAttribute("aria-label", `Retirer « ${c.titre} » de l'historique`);
       supprimer.append(icone("i-corbeille"));
       supprimer.addEventListener("click", () => supprimerConversation(c));
-      ligne.append(ouvrir, infos, supprimer);
+      ligne.append(ouvrir, element("span", "ligne-mode", c.mode === "cowork" ? "cowork" : "chat"), infos, supprimer);
       return ligne;
     }),
   );
@@ -702,7 +760,11 @@ function brancherEvenements() {
   $("arreter").addEventListener("click", arreterTache);
   $("replier").addEventListener("click", basculerBarre);
   $("deplier").addEventListener("click", basculerBarre);
-  $("bouton-modele").addEventListener("click", basculerMenu);
+  $("bouton-modele").addEventListener("click", () => basculerMenu("bouton-modele"));
+  $("bouton-niveau").addEventListener("click", () => basculerMenu("bouton-niveau"));
+  $("form-saisie").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) $("saisie").focus(); // un clic dans le cadre vide vise le texte
+  });
   $("form-saisie").addEventListener("submit", (e) => {
     e.preventDefault();
     envoyer();
@@ -735,10 +797,10 @@ function brancherEvenements() {
   $("defaut-modele").addEventListener("change", sauverDefaut);
   $("defaut-niveau").addEventListener("change", sauverDefaut);
   document.addEventListener("click", (e) => {
-    if (!e.target.closest(".menu-modele")) fermerMenu();
+    if (!e.target.closest(".menu-reglage")) fermerMenus();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") fermerMenu();
+    if (e.key === "Escape") fermerMenus();
     if (e.key === "/" && !e.target.closest("input, textarea, select")) {
       e.preventDefault();
       $("recherche").focus();

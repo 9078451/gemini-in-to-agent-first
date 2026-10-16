@@ -1,13 +1,14 @@
 // Libellés des étapes Cowork (fonctions pures, testées avec `node --test tests/web/`).
 
+// verbe : mot court affiché en monospace sur la ligne de l'étape, comme dans un terminal.
 const ACTIONS = {
-  lister: { icone: "i-dossier", titre: "Dossier listé", champ: "chemin" },
-  lire: { icone: "i-fichier", titre: "Fichier lu", champ: "chemin" },
-  chercher: { icone: "i-recherche", titre: "Recherche", champ: "motif" },
-  creer: { icone: "i-fichier", titre: "Fichier créé", champ: "chemin" },
-  modifier: { icone: "i-crayon", titre: "Fichier modifié", champ: "chemin" },
-  supprimer: { icone: "i-corbeille", titre: "Suppression", champ: "chemin" },
-  commande: { icone: "i-terminal", titre: "Commande", champ: "texte" },
+  lister: { icone: "i-dossier", verbe: "List", titre: "Dossier listé", champ: "chemin" },
+  lire: { icone: "i-fichier", verbe: "Read", titre: "Fichier lu", champ: "chemin" },
+  chercher: { icone: "i-recherche", verbe: "Search", titre: "Recherche", champ: "motif" },
+  creer: { icone: "i-fichier", verbe: "Write", titre: "Fichier créé", champ: "chemin" },
+  modifier: { icone: "i-crayon", verbe: "Edit", titre: "Fichier modifié", champ: "chemin" },
+  supprimer: { icone: "i-corbeille", verbe: "Delete", titre: "Suppression", champ: "chemin" },
+  commande: { icone: "i-terminal", verbe: "Shell", titre: "Commande", champ: "texte" },
 };
 
 const AUTRES = {
@@ -23,13 +24,27 @@ const AUTRES = {
 
 export function libelleEtape(ev) {
   if (ev.type === "action") {
-    const a = ACTIONS[ev.action] ?? { icone: "i-etincelle", titre: ev.action, champ: null };
-    return { icone: a.icone, titre: a.titre, detail: a.champ ? (ev.champs?.[a.champ] ?? "") : "" };
+    const a = ACTIONS[ev.action] ?? { icone: "i-etincelle", verbe: ev.action, titre: ev.action, champ: null };
+    return { icone: a.icone, verbe: a.verbe, titre: a.titre, detail: a.champ ? (ev.champs?.[a.champ] ?? "") : "" };
   }
   const autre = AUTRES[ev.type] ?? { icone: "i-etincelle", titre: ev.type };
-  return { icone: autre.icone, titre: autre.titre, detail: ev.raison ?? ev.resume ?? ev.corps ?? "" };
+  return { icone: autre.icone, verbe: ev.type, titre: autre.titre, detail: ev.raison ?? ev.resume ?? ev.corps ?? "" };
 }
 
 export function estDangereuse(ev) {
   return ev.type === "demande";
+}
+
+export function resumeDiff(diff) {
+  const lignes = diff ? diff.split("\n") : [];
+  return {
+    plus: lignes.filter((l) => l.startsWith("+")).length,
+    moins: lignes.filter((l) => l.startsWith("-")).length,
+  };
+}
+
+export function nombreLignes(texte) {
+  if (!texte) return "fichier vide";
+  const n = texte.replace(/\n$/, "").split("\n").length;
+  return `${n} ligne${n > 1 ? "s" : ""}`;
 }

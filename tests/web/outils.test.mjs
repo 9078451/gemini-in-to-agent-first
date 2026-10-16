@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formaterDate, formaterDuree, groupesParDate, metaMessage, titreDepuis } from "../../agent_first/web/outils.js";
+import { cheminCourt, formaterDate, formaterDuree, groupesParDate, metaMessage, titreDepuis } from "../../agent_first/web/outils.js";
 
 const maintenant = new Date(2026, 9, 16, 14, 30); // 16 oct. 2026, 14:30 (heure locale)
 const iso = (jour, heure = 12, minute = 0, mois = 10, annee = 2026) =>
@@ -49,4 +49,10 @@ test("titre sur une ligne, coupé à 60 caractères", () => {
 test("ligne d'information d'une réponse", () => {
   assert.equal(metaMessage({ modele: "4 Argon", niveau: "Max.", duree: 12 }), "Gemini · 4 Argon · réflexion Max. · 12 s");
   assert.equal(metaMessage({ modele: null, niveau: null, duree: null }), "Gemini");
+});
+
+test("chemin court : le dossier de l'utilisateur devient ~", () => {
+  assert.equal(cheminCourt("C:\\Users\\thoma\\Desktop\\mon-site"), "~\\Desktop\\mon-site");
+  assert.equal(cheminCourt("C:\\Users\\thoma"), "~");
+  assert.equal(cheminCourt("D:\\projets\\site"), "D:\\projets\\site");
 });

@@ -36,31 +36,23 @@
 
   <aside class="barre">
     <div class="barre-haut">
-      <span class="logo">agent<span class="logo-point">.</span>first</span>
+      <span class="logo">agent.first</span>
       <button class="icone" id="replier" type="button" aria-label="Replier la barre latérale" title="Replier"><svg><use href="#i-barre"/></svg></button>
     </div>
-    <label class="recherche">
-      <svg><use href="#i-recherche"/></svg>
-      <input id="recherche" type="search" placeholder="Rechercher…" autocomplete="off" aria-label="Rechercher dans les conversations">
-      <kbd>/</kbd>
-    </label>
     <nav class="nav">
-      <button class="nav-item principal" id="nouvelle" type="button"><svg><use href="#i-plus"/></svg>Nouvelle conversation</button>
-      <button class="nav-item" id="aller-accueil" type="button" data-vue="accueil"><svg><use href="#i-accueil"/></svg>Accueil</button>
+      <button class="nav-item" id="nouvelle" type="button"><svg><use href="#i-plus"/></svg>Nouvelle conversation</button>
+      <button class="nav-item" id="aller-accueil" type="button"><svg><use href="#i-accueil"/></svg>Tableau de bord</button>
+      <label class="nav-item recherche">
+        <svg><use href="#i-recherche"/></svg>
+        <input id="recherche" type="search" placeholder="Rechercher" autocomplete="off" aria-label="Rechercher dans les conversations">
+        <kbd>/</kbd>
+      </label>
     </nav>
-    <div class="section-titre">Conversations</div>
     <div class="liste-conversations" id="liste-conversations"></div>
-    <div class="section-titre">App</div>
-    <nav class="nav">
-      <button class="nav-item" id="aller-historique" type="button"><svg><use href="#i-historique"/></svg>Historique</button>
-      <button class="nav-item" id="ouvrir-parametres" type="button"><svg><use href="#i-reglages"/></svg>Paramètres</button>
-    </nav>
-    <div class="compte">
-      <span class="avatar">G</span>
-      <div>
-        <div class="compte-nom">Compte Google</div>
-        <div class="compte-etat" id="etat-google">…</div>
-      </div>
+    <div class="barre-bas">
+      <span class="etat-gemini"><span class="point" id="point-google"></span><span id="etat-google">Gemini · …</span></span>
+      <button class="icone" id="aller-historique" type="button" aria-label="Historique" title="Historique"><svg><use href="#i-historique"/></svg></button>
+      <button class="icone" id="ouvrir-parametres" type="button" aria-label="Paramètres" title="Paramètres"><svg><use href="#i-reglages"/></svg></button>
     </div>
   </aside>
 
@@ -69,21 +61,17 @@
 
     <section class="vue" id="vue-accueil">
       <header class="accueil-entete">
-        <h1>Bon retour sur <span class="accent">agent.first</span></h1>
-        <p>Voici tes conversations avec Gemini.</p>
+        <h1>Tableau de bord</h1>
+        <p>Tes conversations avec Gemini, en Chat et en Cowork.</p>
       </header>
-      <form class="grande-recherche" id="form-historique" role="search">
-        <span class="rond"><svg><use href="#i-recherche"/></svg></span>
-        <input id="recherche-historique" type="search" placeholder="Rechercher dans l'historique…" autocomplete="off" aria-label="Rechercher dans l'historique">
-        <button class="icone" type="submit" aria-label="Rechercher"><svg><use href="#i-fleche"/></svg></button>
-      </form>
       <div class="cartes" id="cartes"></div>
       <section class="panneau" id="panneau-historique">
         <div class="panneau-entete">
-          <div>
-            <h2>Historique</h2>
-            <p>Clique sur une conversation pour la reprendre.</p>
-          </div>
+          <h2>Historique</h2>
+          <form class="recherche-historique" id="form-historique" role="search">
+            <svg><use href="#i-recherche"/></svg>
+            <input id="recherche-historique" type="search" placeholder="Filtrer" autocomplete="off" aria-label="Rechercher dans l'historique">
+          </form>
           <div class="segments" id="periodes">
             <button type="button" data-periode="7j" class="actif">7 jours</button>
             <button type="button" data-periode="30j">30 jours</button>
@@ -96,40 +84,41 @@
 
     <section class="vue" id="vue-discussion" hidden>
       <header class="discussion-entete">
-        <div class="entete-gauche">
-          <div class="segments" id="modes" role="radiogroup" aria-label="Mode">
-            <button type="button" data-mode="chat" class="actif">Chat</button>
-            <button type="button" data-mode="cowork">Cowork</button>
-          </div>
-          <h2 id="titre-conversation">Nouvelle conversation</h2>
-        </div>
-        <div class="reglages">
-          <div class="menu-modele">
-            <button class="pilule" id="bouton-modele" type="button" aria-haspopup="listbox" aria-expanded="false">
-              <svg class="accent"><use href="#i-etincelle"/></svg><span id="nom-modele">Modèle</span><svg class="discret"><use href="#i-chevron"/></svg>
-            </button>
-            <div class="menu" id="menu-modeles" role="listbox" aria-label="Modèle" hidden></div>
-          </div>
-          <div class="segments" id="niveaux" role="radiogroup" aria-label="Niveau de réflexion"></div>
+        <h2 id="titre-conversation">Nouvelle conversation</h2>
+        <button class="chemin" id="choisir-dossier" type="button" title="Choisir le dossier de travail" hidden>
+          <svg><use href="#i-dossier"/></svg><span id="nom-dossier">Choisir un dossier</span>
+        </button>
+        <div class="segments" id="modes" role="radiogroup" aria-label="Mode">
+          <button type="button" data-mode="chat" class="actif">Chat</button>
+          <button type="button" data-mode="cowork">Cowork</button>
         </div>
       </header>
-      <div class="ligne-dossier" id="ligne-dossier" hidden>
-        <button class="pilule" id="choisir-dossier" type="button" title="Choisir le dossier de travail">
-          <svg class="accent"><use href="#i-dossier"/></svg><span id="nom-dossier">Choisir un dossier de travail</span>
-        </button>
-        <button class="pilule arreter" id="arreter" type="button" hidden>
-          <svg><use href="#i-stop"/></svg>Arrêter
-        </button>
-      </div>
       <div class="fil" id="fil"></div>
-      <form class="saisie" id="form-saisie">
-        <textarea id="saisie" rows="1" placeholder="Demande à Gemini…" aria-label="Ton message"></textarea>
-        <button class="envoyer" id="envoyer" type="submit" aria-label="Envoyer"><svg><use href="#i-fleche-haut"/></svg></button>
-      </form>
-      <div class="pied">Entrée pour envoyer · Maj+Entrée pour aller à la ligne</div>
+      <div class="composeur">
+        <form class="saisie" id="form-saisie">
+          <textarea id="saisie" rows="1" placeholder="Demande à Gemini…" aria-label="Ton message"></textarea>
+          <div class="saisie-bas">
+            <div class="menu-reglage">
+              <button class="reglage" id="bouton-modele" type="button" aria-haspopup="listbox" aria-expanded="false" title="Modèle">
+                <span id="nom-modele">Modèle</span><svg><use href="#i-chevron"/></svg>
+              </button>
+              <div class="menu" id="menu-modeles" role="listbox" aria-label="Modèle" hidden></div>
+            </div>
+            <div class="menu-reglage">
+              <button class="reglage" id="bouton-niveau" type="button" aria-haspopup="listbox" aria-expanded="false" title="Niveau de réflexion">
+                <span id="nom-niveau">Réflexion</span><svg><use href="#i-chevron"/></svg>
+              </button>
+              <div class="menu" id="menu-niveaux" role="listbox" aria-label="Niveau de réflexion" hidden></div>
+            </div>
+            <button class="arreter" id="arreter" type="button" title="Arrêter la tâche après l'étape en cours" hidden><svg><use href="#i-stop"/></svg>Arrêter</button>
+            <button class="envoyer" id="envoyer" type="submit" aria-label="Envoyer"><svg><use href="#i-fleche-haut"/></svg></button>
+          </div>
+        </form>
+        <div class="pied">Entrée pour envoyer · Maj+Entrée pour aller à la ligne</div>
+      </div>
     </section>
 
-    <div class="pastille" id="pastille" role="status"><span id="pastille-texte">Connexion…</span><span class="point" id="pastille-point"></span></div>
+    <div class="pastille" id="pastille" role="status"><span class="point" id="pastille-point"></span><span id="pastille-texte">Connexion…</span></div>
   </main>
 
   <dialog id="parametres">
