@@ -55,6 +55,15 @@ class MessageNonEnvoye(ErreurPilote):
         )
 
 
+class LimiteGemini(ErreurPilote):
+    def __init__(self, bandeau: str) -> None:
+        super().__init__(
+            f"Ton compte Gemini a atteint sa limite d'utilisation (« {bandeau} »). "
+            "Gemini n'accepte plus de message pour l'instant : choisis un modèle plus léger "
+            "(par exemple Flash) ou attends l'heure indiquée."
+        )
+
+
 class DelaiDepasse(ErreurPilote):
     def __init__(self, delai: float, partiel: str) -> None:
         self.partiel = partiel

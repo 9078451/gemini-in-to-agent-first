@@ -23,6 +23,10 @@ REPERES: dict[str, list[str]] = {
     "question": [
         "user-query",
     ],
+    # « Votre limite sera réinitialisée à … » au-dessus du champ, quand le compte a tout utilisé.
+    "bandeau_limite": [
+        ".inline-upgrade-banner-text",
+    ],
     "reponse": [
         "model-response message-content",
         "model-response",

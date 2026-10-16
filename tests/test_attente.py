@@ -1,7 +1,7 @@
 import pytest
 
-from pilote.attente import attendre_envoi, attendre_fin_reponse
-from pilote.erreurs import DelaiDepasse, MessageNonEnvoye
+from pilote.attente import attendre_envoi, attendre_fin_reponse, erreur_envoi
+from pilote.erreurs import DelaiDepasse, LimiteGemini, MessageNonEnvoye
 
 
 class Horloge:
@@ -80,3 +80,14 @@ def test_envoi_non_confirme_leve_une_erreur_claire():
     with pytest.raises(MessageNonEnvoye):
         attendre_envoi(lambda: 1, nb_avant=1, delai=15.0, horloge=horloge, dormir=horloge.dormir)
     assert 15.0 <= horloge.t < 17.0
+
+
+def test_envoi_refuse_sans_bandeau():
+    assert isinstance(erreur_envoi(None), MessageNonEnvoye)
+
+
+def test_envoi_refuse_avec_bandeau_de_limite():
+    # Compte arrivé à sa limite d'utilisation : Gemini garde le message dans le champ.
+    erreur = erreur_envoi("Votre limite sera réinitialisée à 2:58 PM")
+    assert isinstance(erreur, LimiteGemini)
+    assert "2:58 PM" in str(erreur)

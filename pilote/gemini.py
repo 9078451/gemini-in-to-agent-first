@@ -10,15 +10,16 @@ from playwright.sync_api import Locator, Page
 from pilote import modes
 from pilote.attente import attendre_envoi, attendre_fin_reponse
 from pilote.chrome import ChromeDedie
-from pilote.erreurs import DelaiDepasse, PasConnecteGoogle, RepereIntrouvable, VerificationGoogle
+from pilote.erreurs import DelaiDepasse, ErreurPilote, PasConnecteGoogle, RepereIntrouvable, VerificationGoogle
 from pilote.modeles import Modes, ResultatGemini
 from pilote.reperes import attendre_repere, compter, premier_present
 from pilote.selecteurs import BLOC_CODE, CONTENU_REPONSE, DECOR_REPONSE, ENTETE_CODE
 
 journal = logging.getLogger(__name__)
 
-# s : délai pour que la question apparaisse dans la conversation après le clic sur Envoyer
-DELAI_ENVOI = 15.0
+# s : délai pour que la question apparaisse dans la conversation après le clic sur Envoyer.
+# Large : quand le compte atteint sa limite, Gemini peut accepter le message en retard.
+DELAI_ENVOI = 60.0
 
 EXTRAIRE_HTML = """(element, s) => {
   const copie = (element.querySelector(s.contenu) || element).cloneNode(true);
@@ -121,7 +122,17 @@ class PiloteGemini:
         # n'envoient pas le message en morceaux.
         page.keyboard.insert_text(texte)
         attendre_repere(page, "bouton_envoyer", 5).first.click()
-        attendre_envoi(lambda: compter(page, "question"), questions_avant, DELAI_ENVOI)
+        try:
+            attendre_envoi(
+                lambda: compter(page, "question"), questions_avant, DELAI_ENVOI, lambda: self._bandeau_limite(page)
+            )
+        except ErreurPilote:
+            # Vider le champ : sinon Gemini peut envoyer ce message plus tard, tout seul,
+            # alors qu'Agent First a déjà abandonné.
+            champ.first.click()
+            page.keyboard.press("Control+A")
+            page.keyboard.press("Delete")
+            raise
 
         # Un seul délai pour tout le message : Gemini peut réfléchir longtemps
         # avant même d'afficher le début de sa réponse.
@@ -188,6 +199,13 @@ class PiloteGemini:
         if self._generation_en_cours(page):
             raise DelaiDepasse(delai, "")
         raise RepereIntrouvable("reponse")
+
+    def _bandeau_limite(self, page: Page) -> str | None:
+        """Texte du bandeau « Votre limite sera réinitialisée à … », s'il est affiché."""
+        bandeau = premier_present(page, "bandeau_limite")
+        if bandeau is None or not bandeau.first.is_visible():
+            return None
+        return " ".join(bandeau.first.inner_text().split()) or None
 
     def _generation_en_cours(self, page: Page) -> bool:
         bouton = premier_present(page, "bouton_arreter")

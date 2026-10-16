@@ -2,26 +2,33 @@
 import time
 from typing import Callable
 
-from pilote.erreurs import DelaiDepasse, MessageNonEnvoye
+from pilote.erreurs import DelaiDepasse, ErreurPilote, LimiteGemini, MessageNonEnvoye
+
+
+def erreur_envoi(bandeau_limite: str | None) -> ErreurPilote:
+    """L'erreur à montrer quand Gemini n'a pas pris le message : la limite
+    d'utilisation du compte si Gemini l'affiche, sinon une cause inconnue."""
+    return LimiteGemini(bandeau_limite) if bandeau_limite else MessageNonEnvoye()
 
 
 def attendre_envoi(
     compter_questions: Callable[[], int],
     nb_avant: int,
     delai: float,
+    lire_bandeau_limite: Callable[[], str | None] = lambda: None,
     intervalle: float = 0.5,
     horloge: Callable[[], float] = time.monotonic,
     dormir: Callable[[float], None] = time.sleep,
 ) -> None:
-    """Attend que la question apparaisse dans la conversation. Sinon (réseau
-    coupé, clic ignoré), lève MessageNonEnvoye après `delai` au lieu de laisser
-    attendre une réponse qui ne viendra jamais."""
+    """Attend que la question apparaisse dans la conversation. Sinon (limite
+    d'utilisation, réseau coupé, clic ignoré), lève une erreur après `delai`
+    au lieu de laisser attendre une réponse qui ne viendra jamais."""
     fin = horloge() + delai
     while horloge() < fin:
         if compter_questions() > nb_avant:
             return
         dormir(intervalle)
-    raise MessageNonEnvoye()
+    raise erreur_envoi(lire_bandeau_limite())
 
 
 def attendre_fin_reponse(
