@@ -61,6 +61,13 @@ export function metaMessage(message) {
     .join(" · ");
 }
 
+// Option (modèle ou niveau) bloquée par la limite du compte : Gemini remplace sa description
+// par « Réinitialisation de la limite : 16 oct., 14:58 ». Renvoie ce moment, sinon null.
+export function limiteOption(option) {
+  const trouve = (option.description ?? "").replace(/\s+/g, " ").match(/^\s*Réinitialisation de la limite\s*:\s*(.+?)\s*$/);
+  return trouve ? trouve[1] : null;
+}
+
 // « C:\Users\nom\Desktop\site » → « ~\Desktop\site » ; les autres chemins restent tels quels.
 export function cheminCourt(chemin) {
   return chemin.replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/i, "~");

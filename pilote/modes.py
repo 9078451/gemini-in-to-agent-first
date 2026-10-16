@@ -10,8 +10,9 @@ import sys
 import time
 
 from playwright.sync_api import Locator, Page
+from playwright.sync_api import TimeoutError as DelaiPlaywright
 
-from pilote.erreurs import ErreurPilote, ModeleIntrouvable, NiveauIntrouvable
+from pilote.erreurs import ChoixBloque, ErreurPilote, ModeleIntrouvable, NiveauIntrouvable
 from pilote.modeles import Modes, Option
 from pilote.reperes import attendre_repere
 from pilote.selecteurs import ENTREE_NIVEAU, LIBELLE_OPTION, OPTION_MENU, OPTION_MODELE, SOUS_LIBELLE_OPTION
@@ -25,6 +26,17 @@ LIRE_OPTIONS = """(elements, s) => elements.filter(e => e.offsetParent).map(e =>
   modele: e.matches(s.modele),
 }))"""
 OPTION_NIVEAU = f"{OPTION_MENU}:not({OPTION_MODELE})"
+
+
+_LIMITE = re.compile(r"^\s*Réinitialisation\s+de\s+la\s+limite\s*:\s*(.+?)\s*$")
+
+
+def limite_de(description: str) -> str | None:
+    """Quand le compte a atteint sa limite, Gemini remplace la description d'une
+    option bloquée par « Réinitialisation de la limite : 16 oct., 14:58 ».
+    Renvoie alors le moment de la réinitialisation, sinon None."""
+    trouve = _LIMITE.match(" ".join(description.split()))
+    return trouve.group(1) if trouve else None
 
 
 def motif_libelle(nom: str) -> re.Pattern:
@@ -56,6 +68,7 @@ def choisir_modele(page: Page, nom: str) -> None:
         option = _option(page, nom, OPTION_MODELE)
         if option.count() == 0:
             raise ModeleIntrouvable(nom)
+        _verifier_libre(page, nom, modele=True)
         _cliquer(option)
     finally:
         _fermer(page)
@@ -74,6 +87,7 @@ def choisir_niveau(page: Page, nom: str) -> bool:
         option = _option(page, nom, OPTION_NIVEAU)
         if option.count() == 0:
             raise NiveauIntrouvable(nom)
+        _verifier_libre(page, nom, modele=False)
         _cliquer(option)
     finally:
         _fermer(page)
@@ -87,11 +101,26 @@ def _ouvrir(page: Page) -> None:
     page.locator(OPTION_MODELE).first.wait_for(state="visible", timeout=5000)
 
 
+def _verifier_libre(page: Page, nom: str, modele: bool) -> None:
+    """Lève ChoixBloque si Gemini marque cette option comme bloquée par la limite
+    du compte : un clic dessus ne ferait rien."""
+    for o in _lire(page):
+        if o["modele"] == modele and motif_libelle(nom).fullmatch(o["nom"]):
+            quand = limite_de(o["description"])
+            if quand:
+                raise ChoixBloque(nom, quand)
+
+
 def _cliquer(option: Locator) -> None:
     """Clic envoyé directement à l'option : dans une nouvelle conversation, la
     saisie est au milieu de l'écran et le sous-menu dépasse de la fenêtre,
     où un clic à la souris est impossible."""
-    option.first.dispatch_event("click")
+    try:
+        option.first.dispatch_event("click", timeout=5000)
+    except DelaiPlaywright as e:
+        # L'option a disparu entre sa lecture et le clic (menu en train de se refermer) :
+        # sans délai court, on attendait 30 s pour rien.
+        raise ErreurPilote("Le menu des modèles de Gemini s'est refermé avant le clic : renvoie ton message.") from e
 
 
 def _fermer(page: Page) -> None:

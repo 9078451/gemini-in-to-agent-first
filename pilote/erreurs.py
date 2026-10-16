@@ -55,6 +55,16 @@ class MessageNonEnvoye(ErreurPilote):
         )
 
 
+class ChoixBloque(ErreurPilote):
+    def __init__(self, nom: str, reinitialisation: str) -> None:
+        self.nom = nom
+        super().__init__(
+            f"« {nom} » est bloqué : ton compte Gemini a atteint sa limite d'utilisation "
+            f"(réinitialisation : {reinitialisation}). Choisis un autre modèle ou niveau, "
+            "ou attends cette heure-là."
+        )
+
+
 class LimiteGemini(ErreurPilote):
     def __init__(self, bandeau: str) -> None:
         super().__init__(

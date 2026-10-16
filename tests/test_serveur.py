@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from agent_first.file_attente import FileAttente
 from agent_first.historique import Historique
 from agent_first.serveur import creer_app
-from pilote.erreurs import ModeleIntrouvable, PasConnecteGoogle
+from pilote.erreurs import ChoixBloque, ModeleIntrouvable, PasConnecteGoogle
 from pilote.modeles import Modes, Option, ResultatGemini
 
 PAR_DEFAUT = Modes([Option("4 Argon", "Tâches complexes")], [Option("Min.", "Rapide et efficace")])
@@ -177,6 +177,17 @@ def test_modele_introuvable_relit_la_liste(client, pilote):
     r = envoyer(client, nouvelle(client), "Bonjour", modele="9 Zeta")
     assert r.status_code == 502
     assert "9 Zeta" in r.json()["erreur"]
+    client.get("/api/modeles")
+    assert pilote.listes == 2
+
+
+def test_choix_bloque_relit_la_liste(client, pilote):
+    # Les options bloquées par la limite changent de description : l'app doit les revoir.
+    client.get("/api/modeles")
+    pilote.erreur = ChoixBloque("4 Argon", "16 oct., 14:58")
+    r = envoyer(client, nouvelle(client), "Bonjour", modele="4 Argon")
+    assert r.status_code == 502
+    assert "14:58" in r.json()["erreur"]
     client.get("/api/modeles")
     assert pilote.listes == 2
 

@@ -14,7 +14,7 @@ from pydantic import BaseModel, field_validator
 from agent_first.file_attente import FileAttente
 from agent_first.historique import ConversationInconnue, Historique
 from agent_first.nettoyage import nettoyer_html
-from pilote.erreurs import ErreurPilote, ModeleIntrouvable, NiveauIntrouvable
+from pilote.erreurs import ChoixBloque, ErreurPilote, ModeleIntrouvable, NiveauIntrouvable
 from pilote.modeles import Modes, ResultatGemini
 
 journal = logging.getLogger(__name__)
@@ -174,7 +174,7 @@ def creer_app(
             resultat = futur.result(timeout=delai)
         except DelaiFutur:
             return echec(identifiant, 504, f"Pas de réponse de Gemini après {delai:.0f} s.")
-        except (ModeleIntrouvable, NiveauIntrouvable) as e:
+        except (ModeleIntrouvable, NiveauIntrouvable, ChoixBloque) as e:
             cache.pop("modes", None)  # la liste a changé : relue à la prochaine demande
             return echec(identifiant, 502, str(e))
         except ErreurPilote as e:

@@ -222,6 +222,9 @@ kbd { padding: 0 5px; border: 1px solid var(--bordure-2); border-radius: 4px; co
 .option-nom { font-size: 13px; }
 .option[aria-selected="true"] .option-nom::after { content: "  ✓"; color: var(--accent); }
 .option-desc { color: var(--texte-3); font-size: 12px; }
+/* bloquée par la limite du compte : grisée, avec l'heure de réinitialisation en ambre */
+.option.bloquee .option-nom { color: var(--texte-3); }
+.option.bloquee .option-desc { color: var(--ambre); }
 .arreter { display: flex; align-items: center; gap: 6px; margin-left: auto; padding: 3px 10px; border: 1px solid #5a3434; border-radius: 6px; color: var(--rouge); font-size: 12.5px; }
 .arreter:hover { background: rgba(224, 108, 108, .08); }
 .arreter svg { width: 12px; height: 12px; }

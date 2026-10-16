@@ -1,6 +1,6 @@
 // agent.first — état, affichage et événements de l'app.
 import { appeler } from "./api.js";
-import { cheminCourt, formaterDate, formaterDuree, groupesParDate, metaMessage, titreDepuis } from "./outils.js";
+import { cheminCourt, formaterDate, formaterDuree, groupesParDate, limiteOption, metaMessage, titreDepuis } from "./outils.js";
 import { libelleEtape, nombreLignes, resumeDiff } from "./outils_cowork.js";
 
 const $ = (id) => document.getElementById(id);
@@ -130,6 +130,11 @@ function optionsMenu(liste, choisi, choisir) {
     option.setAttribute("role", "option");
     option.setAttribute("aria-selected", String(o.nom === choisi));
     option.append(element("span", "option-nom", o.nom), element("span", "option-desc", o.description));
+    const limite = limiteOption(o);
+    if (limite) {
+      option.classList.add("bloquee"); // Gemini refusera ce choix jusqu'à la réinitialisation
+      option.title = `Bloqué par la limite de ton compte Gemini jusqu'au ${limite}`;
+    }
     option.addEventListener("click", () => {
       choisir(o.nom);
       fermerMenus();
@@ -354,7 +359,7 @@ async function envoyer() {
     ajusterSaisie();
     signaler(e.message === "Agent First n'est pas démarré." ? "Agent First arrêté" : "Erreur", ROUGE);
     verifierEtat(); // met à jour l'état du compte (la pastille garde l'erreur tant que l'envoi est en cours)
-    if (/n'est pas proposé/.test(e.message)) chargerModes();
+    if (/n'est pas proposé|est bloqué/.test(e.message)) chargerModes(); // menus à jour (choix bloqués)
   } finally {
     clearInterval(minuteur);
     etat.occupe = false;
@@ -554,6 +559,7 @@ function ecouterFlux(identifiant) {
         $("fil").querySelectorAll(".point-etat.attente").forEach((p) => (p.className = "point-etat"));
       }
       finirCowork();
+      if (ev.type === "erreur" && /est bloqué/.test(ev.corps)) chargerModes();
       if (ev.type === "termine") signaler("Gemini prêt", VERT);
       else signaler(libelleEtape(ev).titre, ROUGE);
     } else if (ev.type === "demande") {

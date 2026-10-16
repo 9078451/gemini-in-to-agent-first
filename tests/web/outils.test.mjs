@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cheminCourt, formaterDate, formaterDuree, groupesParDate, metaMessage, titreDepuis } from "../../agent_first/web/outils.js";
+import { cheminCourt, formaterDate, limiteOption, formaterDuree, groupesParDate, metaMessage, titreDepuis } from "../../agent_first/web/outils.js";
 
 const maintenant = new Date(2026, 9, 16, 14, 30); // 16 oct. 2026, 14:30 (heure locale)
 const iso = (jour, heure = 12, minute = 0, mois = 10, annee = 2026) =>
@@ -55,4 +55,10 @@ test("chemin court : le dossier de l'utilisateur devient ~", () => {
   assert.equal(cheminCourt("C:\\Users\\thoma\\Desktop\\mon-site"), "~\\Desktop\\mon-site");
   assert.equal(cheminCourt("C:\\Users\\thoma"), "~");
   assert.equal(cheminCourt("D:\\projets\\site"), "D:\\projets\\site");
+});
+
+test("option bloquée par la limite du compte Gemini", () => {
+  assert.equal(limiteOption({ nom: "4 Argon", description: "Réinitialisation de la limite : 16 oct., 14:58" }), "16 oct., 14:58");
+  assert.equal(limiteOption({ nom: "3.5 Flash-Lite", description: "Réponses les plus rapides" }), null);
+  assert.equal(limiteOption({ nom: "Min.", description: "" }), null);
 });
