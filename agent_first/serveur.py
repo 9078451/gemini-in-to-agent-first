@@ -7,7 +7,7 @@ from typing import Callable, Literal
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
@@ -26,6 +26,8 @@ INCONNUE = "Conversation inconnue : démarre une nouvelle conversation."
 class NouvelleConversation(BaseModel):
     modele: str | None = None
     niveau: str | None = None
+    mode: str = "chat"
+    dossier: str | None = None
 
 
 class NouveauMessage(BaseModel):
@@ -41,6 +43,23 @@ class NouveauMessage(BaseModel):
         return valeur
 
 
+class MessageCowork(BaseModel):
+    texte: str
+
+    @field_validator("texte")
+    @classmethod
+    def texte_non_vide(cls, valeur: str) -> str:
+        if not valeur.strip():
+            raise ValueError("le message est vide")
+        return valeur
+
+
+class Decision(BaseModel):
+    etape: int
+    reponse: str
+    toujours: bool = False
+
+
 def erreur(code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=code, content={"erreur": message})
 
@@ -52,6 +71,8 @@ def creer_app(
     chrome_lance: Callable[[], bool],
     modes_par_defaut: Modes,
     dossier_web: Path | None = None,
+    cowork=None,
+    choisir_dossier: Callable[[], str | None] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Agent First")
     cache: dict[str, Modes] = {}
@@ -90,7 +111,39 @@ def creer_app(
     @app.post("/api/conversations")
     def nouvelle_conversation(demande: NouvelleConversation | None = None):
         reglages = demande or NouvelleConversation()
-        return asdict(historique.creer(reglages.modele, reglages.niveau))
+        return asdict(
+            historique.creer(reglages.modele, reglages.niveau, reglages.mode, reglages.dossier)
+        )
+
+    @app.post("/api/cowork/{identifiant}/messages")
+    def cowork_message(identifiant: str, demande: MessageCowork):
+        try:
+            conv = historique.conversation(identifiant)
+        except ConversationInconnue:
+            return erreur(404, INCONNUE)
+        if conv.mode != "cowork" or not conv.dossier:
+            return erreur(422, "Cette conversation n'est pas une tâche Cowork avec un dossier.")
+        historique.ajouter_message(identifiant, "toi", demande.texte)
+        cowork.demarrer(identifiant, conv.dossier, conv.adresse, demande.texte, conv.modele, conv.niveau)
+        return {"ok": True}
+
+    @app.get("/api/cowork/{identifiant}/flux")
+    def cowork_flux(identifiant: str):
+        return StreamingResponse(cowork.flux(identifiant), media_type="text/event-stream")
+
+    @app.post("/api/cowork/{identifiant}/decision")
+    def cowork_decision(identifiant: str, decision: Decision):
+        cowork.decider(identifiant, decision.etape, decision.reponse, decision.toujours)
+        return {"ok": True}
+
+    @app.post("/api/cowork/{identifiant}/arreter")
+    def cowork_arreter(identifiant: str):
+        cowork.arreter(identifiant)
+        return {"ok": True}
+
+    @app.post("/api/dossiers/choisir")
+    def dossiers_choisir():
+        return {"dossier": choisir_dossier() if choisir_dossier else None}
 
     @app.get("/api/conversations/{identifiant}")
     def conversation(identifiant: str):

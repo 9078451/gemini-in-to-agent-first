@@ -6,10 +6,13 @@ import threading
 import uvicorn
 
 import config
+from agent_first.cowork_service import ServiceCowork
+from agent_first.dossier import choisir_dossier
 from agent_first.fenetre import ouvrir_quand_pret, repond
 from agent_first.file_attente import FileAttente
 from agent_first.historique import Historique
 from agent_first.serveur import creer_app
+from cowork.actions import Executeur
 from pilote.chrome import ChromeDedie
 from pilote.gemini import PiloteGemini
 from pilote.modeles import Modes, Option
@@ -45,7 +48,17 @@ def main() -> None:
         [Option(n, d, n == config.MODELE_ACTIF_PAR_DEFAUT) for n, d in config.MODELES_PAR_DEFAUT],
         [Option(n, d, n == config.NIVEAU_ACTIF_PAR_DEFAUT) for n, d in config.NIVEAUX_PAR_DEFAUT],
     )
-    app = creer_app(file, historique, config.DELAI_AGENT, chrome.est_lance, par_defaut, config.DOSSIER_WEB)
+    def fabrique_executeur(dossier):
+        return Executeur(dossier, config.DELAI_COMMANDE, config.TAILLE_MAX_SORTIE)
+
+    cowork = ServiceCowork(
+        file, historique, fabrique_executeur,
+        config.MAX_ETAPES_COWORK, config.ECHECS_FORMAT_MAX, config.TAILLE_MAX_SORTIE,
+    )
+    app = creer_app(
+        file, historique, config.DELAI_AGENT, chrome.est_lance, par_defaut,
+        config.DOSSIER_WEB, cowork=cowork, choisir_dossier=choisir_dossier,
+    )
     if args.ouvrir:
         url = f"http://{config.HOTE_AGENT}:{config.PORT_AGENT}/"
         threading.Thread(
