@@ -20,6 +20,9 @@ REPERES: dict[str, list[str]] = {
         "button[aria-label*='Interrompre']",
         "button[aria-label*='Stop']",
     ],
+    "question": [
+        "user-query",
+    ],
     "reponse": [
         "model-response message-content",
         "model-response",

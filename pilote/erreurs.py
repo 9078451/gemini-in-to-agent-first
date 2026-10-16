@@ -47,6 +47,14 @@ class NiveauIntrouvable(ErreurPilote):
         super().__init__(f"Le niveau de réflexion « {nom} » n'est pas proposé par Gemini.")
 
 
+class MessageNonEnvoye(ErreurPilote):
+    def __init__(self) -> None:
+        super().__init__(
+            "Gemini n'a pas pris le message (connexion à Google coupée ?). "
+            "Vérifie la fenêtre Chrome dédiée, puis renvoie ton message."
+        )
+
+
 class DelaiDepasse(ErreurPilote):
     def __init__(self, delai: float, partiel: str) -> None:
         self.partiel = partiel

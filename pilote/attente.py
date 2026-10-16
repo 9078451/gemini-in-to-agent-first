@@ -1,8 +1,27 @@
-"""Attendre qu'une réponse de Gemini ait fini de s'écrire."""
+"""Attendre que Gemini prenne un message, puis que sa réponse ait fini de s'écrire."""
 import time
 from typing import Callable
 
-from pilote.erreurs import DelaiDepasse
+from pilote.erreurs import DelaiDepasse, MessageNonEnvoye
+
+
+def attendre_envoi(
+    compter_questions: Callable[[], int],
+    nb_avant: int,
+    delai: float,
+    intervalle: float = 0.5,
+    horloge: Callable[[], float] = time.monotonic,
+    dormir: Callable[[float], None] = time.sleep,
+) -> None:
+    """Attend que la question apparaisse dans la conversation. Sinon (réseau
+    coupé, clic ignoré), lève MessageNonEnvoye après `delai` au lieu de laisser
+    attendre une réponse qui ne viendra jamais."""
+    fin = horloge() + delai
+    while horloge() < fin:
+        if compter_questions() > nb_avant:
+            return
+        dormir(intervalle)
+    raise MessageNonEnvoye()
 
 
 def attendre_fin_reponse(

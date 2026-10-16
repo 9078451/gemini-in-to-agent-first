@@ -8,7 +8,7 @@ from playwright.sync_api import Error as ErreurPlaywright
 from playwright.sync_api import Locator, Page
 
 from pilote import modes
-from pilote.attente import attendre_fin_reponse
+from pilote.attente import attendre_envoi, attendre_fin_reponse
 from pilote.chrome import ChromeDedie
 from pilote.erreurs import DelaiDepasse, PasConnecteGoogle, RepereIntrouvable, VerificationGoogle
 from pilote.modeles import Modes, ResultatGemini
@@ -16,6 +16,9 @@ from pilote.reperes import attendre_repere, compter, premier_present
 from pilote.selecteurs import BLOC_CODE, CONTENU_REPONSE, DECOR_REPONSE, ENTETE_CODE
 
 journal = logging.getLogger(__name__)
+
+# s : délai pour que la question apparaisse dans la conversation après le clic sur Envoyer
+DELAI_ENVOI = 15.0
 
 EXTRAIRE_HTML = """(element, s) => {
   const copie = (element.querySelector(s.contenu) || element).cloneNode(true);
@@ -88,11 +91,13 @@ class PiloteGemini:
     def _envoyer(
         self, page: Page, adresse: str | None, texte: str, modele: str | None, niveau: str | None, delai: float
     ) -> ResultatGemini:
+        ouverte = False  # vrai si on vient d'ouvrir une conversation existante
         if adresse is None:
             page.goto(self._url_nouvelle, wait_until="domcontentloaded")
         elif page.url != adresse:
             page.goto(adresse, wait_until="domcontentloaded")
             self._attendre_historique(page)
+            ouverte = True
 
         try:
             champ = attendre_repere(page, "champ_saisie", 15)
@@ -100,9 +105,15 @@ class PiloteGemini:
             self._verifier_acces(page)
             raise
         self._verifier_acces(page)
+        if ouverte and (modele or niveau):
+            # Ouvrir une conversation remet le sélecteur sur SES réglages (souvent Max.) :
+            # les derniers réglages connus ne valent plus, on relit les vrais.
+            lus = modes.lire_modes(page)
+            self._modele, self._niveau = lus.modele_actif, lus.niveau_actif
         self._regler(page, modele, niveau)
 
         nb_avant = compter(page, "reponse")
+        questions_avant = compter(page, "question")
         champ.first.click()
         page.keyboard.press("Control+A")
         page.keyboard.press("Delete")
@@ -110,6 +121,7 @@ class PiloteGemini:
         # n'envoient pas le message en morceaux.
         page.keyboard.insert_text(texte)
         attendre_repere(page, "bouton_envoyer", 5).first.click()
+        attendre_envoi(lambda: compter(page, "question"), questions_avant, DELAI_ENVOI)
 
         # Un seul délai pour tout le message : Gemini peut réfléchir longtemps
         # avant même d'afficher le début de sa réponse.

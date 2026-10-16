@@ -1,7 +1,7 @@
 import pytest
 
-from pilote.attente import attendre_fin_reponse
-from pilote.erreurs import DelaiDepasse
+from pilote.attente import attendre_envoi, attendre_fin_reponse
+from pilote.erreurs import DelaiDepasse, MessageNonEnvoye
 
 
 class Horloge:
@@ -65,3 +65,18 @@ def test_generation_sans_fin_renvoie_le_debut():
         attendre(lambda: "Début de réponse", lambda: True, h, delai_max=10.0)
     assert erreur.value.partiel == "Début de réponse"
     assert "Début de réponse" in str(erreur.value)
+
+
+def test_envoi_confirme_quand_la_question_apparait():
+    horloge = Horloge()
+    comptes = iter([1, 1, 1, 2])
+    attendre_envoi(lambda: next(comptes), nb_avant=1, delai=15.0, horloge=horloge, dormir=horloge.dormir)
+    assert horloge.t < 15.0
+
+
+def test_envoi_non_confirme_leve_une_erreur_claire():
+    # Sans cette vérification, un message resté dans le champ faisait attendre toute la limite (10 min).
+    horloge = Horloge()
+    with pytest.raises(MessageNonEnvoye):
+        attendre_envoi(lambda: 1, nb_avant=1, delai=15.0, horloge=horloge, dormir=horloge.dormir)
+    assert 15.0 <= horloge.t < 17.0
