@@ -6,13 +6,16 @@ import threading
 import uvicorn
 
 import config
+from agent_first.api_reseau import creer_api_reseau
 from agent_first.cache_modes import CacheModes
+from agent_first.cle_api import GardeCle
 from agent_first.cowork_service import ServiceCowork
 from agent_first.diffuseur import Diffuseur
 from agent_first.dossier import choisir_dossier
 from agent_first.fenetre import ouvrir_quand_pret, repond
 from agent_first.file_attente import FileAttente
 from agent_first.historique import Historique
+from agent_first.openai_compat import adresse_reseau
 from agent_first.serveur import creer_app
 from cowork.actions import Executeur
 from cowork.boucle import Reglages
@@ -79,10 +82,18 @@ def main() -> None:
         delai_accord=config.DELAI_ACCORD, delai_reponse=config.DELAI_REPONSE_COWORK,
         diffuseur=diffuseur, max_entrees=config.MAX_ENTREES_ARBORESCENCE,
     )
+    garde, adresse_api, serveur_api = None, None, None
+    if config.API_ACTIVE:
+        garde = GardeCle(config.FICHIER_CLE_API, essais_max=config.ESSAIS_CLE_MAX)
+        adresse_api = f"http://{adresse_reseau()}:{config.PORT_API}/v1"
+        api = creer_api_reseau(file, historique, cowork, garde, cache_modes, config.DELAI_AGENT)
+        serveur_api = uvicorn.Server(uvicorn.Config(api, host=config.HOTE_API, port=config.PORT_API, log_level="warning"))
+        threading.Thread(target=serveur_api.run, name="api-reseau", daemon=True).start()
+        logging.getLogger("agent_first").info("API réseau : %s (clé dans Paramètres ou %s)", adresse_api, config.FICHIER_CLE_API)
     app = creer_app(
         file, historique, config.DELAI_AGENT, chrome.est_lance, par_defaut,
         config.DOSSIER_WEB, cowork=cowork, choisir_dossier=choisir_dossier,
-        diffuseur=diffuseur, cache_modes=cache_modes,
+        diffuseur=diffuseur, cache_modes=cache_modes, garde_api=garde, adresse_api=adresse_api,
     )
     if args.ouvrir:
         url = f"http://{config.HOTE_AGENT}:{config.PORT_AGENT}/"
@@ -92,6 +103,8 @@ def main() -> None:
     try:
         uvicorn.run(app, host=config.HOTE_AGENT, port=config.PORT_AGENT)
     finally:
+        if serveur_api is not None:
+            serveur_api.should_exit = True
         cowork.arreter_tout()  # les serveurs lancés par Cowork s'arrêtent avec Agent First
         file.arreter()
 

@@ -223,3 +223,23 @@ def test_page_web_servie_sans_cache(pilote, tmp_path):
     assert "javascript" in script.headers["content-type"]
     assert "cache-control" not in client.get("/api/statistiques").headers
     file.arreter()
+
+
+def test_api_reseau_infos(pilote, tmp_path):
+    from agent_first.cle_api import GardeCle
+
+    garde = GardeCle(tmp_path / "cle.txt")
+    file = FileAttente(lambda: pilote)
+    file.demarrer()
+    app = creer_app(file, Historique(tmp_path / "historique.db"), 2.0, lambda: True, PAR_DEFAUT,
+                    garde_api=garde, adresse_api="http://192.168.1.10:8766/v1")
+    client = TestClient(app)
+    infos = client.get("/api/api-reseau").json()
+    assert infos == {"active": True, "adresse": "http://192.168.1.10:8766/v1", "cle": garde.cle}
+    nouvelle = client.post("/api/api-reseau/cle").json()["cle"]
+    assert nouvelle == garde.cle and nouvelle != infos["cle"]
+    file.arreter()
+
+
+def test_api_reseau_inactive(client):
+    assert client.get("/api/api-reseau").json() == {"active": False, "adresse": None, "cle": None}

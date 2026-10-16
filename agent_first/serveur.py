@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 from agent_first.cache_modes import CacheModes
+from agent_first.cle_api import GardeCle
 from agent_first.cowork_service import TacheEnCours
 from agent_first.diffuseur import Diffuseur
 from agent_first.file_attente import FileAttente
@@ -79,6 +80,8 @@ def creer_app(
     choisir_dossier: Callable[[], str | None] | None = None,
     diffuseur: Diffuseur | None = None,
     cache_modes: CacheModes | None = None,
+    garde_api: GardeCle | None = None,
+    adresse_api: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Agent First")
     modes = cache_modes or CacheModes(file, chrome_lance, modes_par_defaut)
@@ -158,6 +161,18 @@ def creer_app(
     def cowork_arreter(identifiant: str):
         cowork.arreter(identifiant)
         return {"ok": True}
+
+    @app.get("/api/api-reseau")
+    def api_reseau():
+        if garde_api is None:
+            return {"active": False, "adresse": None, "cle": None}
+        return {"active": True, "adresse": adresse_api, "cle": garde_api.cle}
+
+    @app.post("/api/api-reseau/cle")
+    def api_reseau_cle():
+        if garde_api is None:
+            return erreur(404, "L'API réseau n'est pas active (API_ACTIVE dans config.py).")
+        return {"cle": garde_api.regenerer()}
 
     @app.post("/api/dossiers/choisir")
     def dossiers_choisir():
