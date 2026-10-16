@@ -36,3 +36,13 @@ def test_est_termine():
 def test_formater_resultat():
     assert formater_resultat(True, "deux fichiers") == "OK\ndeux fichiers"
     assert formater_resultat(False, "fichier absent") == "ERREUR : fichier absent"
+
+
+def test_lire_action_dans_le_texte_affiche_par_gemini():
+    # Gemini web affiche le bloc de code sans les ``` : « JSON » puis l'objet.
+    msg = 'Je crée le fichier.\nJSON\n{\n  "action": "creer",\n  "chemin": "a.txt",\n  "contenu": "x { y }"\n}'
+    assert lire_action(msg) == Action("creer", {"chemin": "a.txt", "contenu": "x { y }"})
+
+
+def test_lire_action_ignore_un_objet_sans_action():
+    assert lire_action('Voici un exemple : {"nom": "x"} et rien d\'autre.') is None

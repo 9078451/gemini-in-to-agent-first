@@ -18,15 +18,39 @@ class Action:
 
 
 def lire_action(message: str) -> Action | None:
-    """Premier bloc json valide contenant une clé « action ». None sinon."""
+    """Premier bloc json valide contenant une clé « action ». None sinon.
+
+    Gemini web affiche le bloc de code sans ses ``` (« JSON » puis l'objet) : à
+    défaut de bloc balisé, on prend le premier objet JSON du texte qui a une clé
+    « action ».
+    """
     for correspondance in _BLOC.finditer(message):
+        action = _vers_action(correspondance.group(1))
+        if action:
+            return action
+    decodeur = json.JSONDecoder()
+    for position, caractere in enumerate(message):
+        if caractere != "{":
+            continue
         try:
-            objet = json.loads(correspondance.group(1))
+            objet, _fin = decodeur.raw_decode(message, position)
         except ValueError:
             continue
-        if isinstance(objet, dict) and isinstance(objet.get("action"), str):
-            champs = {k: str(v) for k, v in objet.items() if k != "action"}
-            return Action(nom=objet["action"], champs=champs)
+        action = _vers_action(objet)
+        if action:
+            return action
+    return None
+
+
+def _vers_action(source) -> Action | None:
+    if isinstance(source, str):
+        try:
+            source = json.loads(source)
+        except ValueError:
+            return None
+    if isinstance(source, dict) and isinstance(source.get("action"), str):
+        champs = {k: str(v) for k, v in source.items() if k != "action"}
+        return Action(nom=source["action"], champs=champs)
     return None
 
 
