@@ -231,3 +231,21 @@ def test_erreur_de_gemini_deux_fois_arrete_clairement():
 def test_ancien_format_termine_accepte():
     evs, _, _ = lancer(["TERMINÉ : c'est fait"])
     assert evs[-1] == {"type": "termine", "resume": "c'est fait"}
+
+
+def test_arret_pendant_un_lot():
+    # « Arrêter » doit couper un lot : les actions restantes ne sont pas exécutées.
+    evenements, executees = [], []
+    arret = {"demande": False}
+
+    def executer(action):
+        executees.append(action)
+        arret["demande"] = True  # l'utilisateur appuie sur Arrêter pendant la 1re action
+        return Resultat(True, "ok")
+
+    envoyer = FauxEnvoyeur([bloc(*[{"action": "run", "command": f"echo {i}"} for i in range(5)])])
+    executer_tache("tâche", EtatTache(), Branchements(envoyer, executer, TOUT_SUR, ACCORD_OUI, evenements.append,
+                                                      doit_arreter=lambda: arret["demande"]),
+                   Reglages(max_tours=2, max_actions=10, echecs_max=3, taille_max=8000, taille_max_message=30000, relances_fin_max=2))
+    assert len(executees) == 1
+    assert envoyer.messages[1].count("SKIPPED\nstopped by the user") == 4

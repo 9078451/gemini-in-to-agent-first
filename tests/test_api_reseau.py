@@ -54,7 +54,7 @@ def monte(tmp_path):
         historique = Historique(tmp_path / "historique.db")
         service = ServiceCowork(
             file, historique,
-            lambda dossier, processus: Executeur(dossier, 5, 8000, lancer=lambda *a: (0, "sortie"), processus=processus),
+            lambda dossier, processus, arret: Executeur(dossier, 5, 8000, lancer=lambda *a, **k: (0, "sortie"), processus=processus, arret=arret),
             REGLAGES,
             lambda dossier, au_changement: GestionnaireProcessus(dossier, 3, 0.3, 8000, au_changement=au_changement),
         )

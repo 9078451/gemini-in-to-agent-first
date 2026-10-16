@@ -58,10 +58,10 @@ def main() -> None:
     # Gemini ne doit pas pouvoir joindre Agent First (il validerait ses propres accords) ni le Chrome dédié.
     ports_interdits = frozenset({config.PORT_AGENT, config.PORT_API, config.PORT_CHROME})
 
-    def fabrique_executeur(dossier, processus):
+    def fabrique_executeur(dossier, processus, arret):
         return Executeur(
             dossier, config.DELAI_COMMANDE, config.TAILLE_MAX_SORTIE, processus=processus,
-            ports_interdits=ports_interdits, delai_visite=config.DELAI_VISITE,
+            ports_interdits=ports_interdits, delai_visite=config.DELAI_VISITE, arret=arret,
         )
 
     def fabrique_processus(dossier, au_changement):

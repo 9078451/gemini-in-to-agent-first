@@ -55,8 +55,8 @@ def fabrique_processus(dossier, au_changement):
     )
 
 
-def fabrique_executeur(dossier, processus):
-    return Executeur(dossier, 5, 8000, lancer=lambda *a: (0, "sortie"), processus=processus)
+def fabrique_executeur(dossier, processus, arret):
+    return Executeur(dossier, 5, 8000, lancer=lambda *a, **k: (0, "sortie"), processus=processus, arret=arret)
 
 
 def service_sur(file, historique, diffuseur=None, **options):
@@ -396,4 +396,29 @@ def test_cowork_laisse_a_gemini_sa_propre_limite_par_message(tmp_path):
     conv = historique.creer(mode="cowork", dossier=str(tmp_path))
     lancer_tache(client, service, conv.id, "rien")
     assert pilote.delais == [600.0]
+    file.arreter()
+
+
+def test_arreter_coupe_un_lot(tmp_path):
+    lances = []
+
+    def lent(texte, dossier, delai, arret=None):
+        lances.append(texte)
+        time.sleep(0.3)
+        return 0, "ok"
+
+    pilote = FauxPilote([bloc(*[{"action": "run", "command": f"echo {i}"} for i in range(5)])])
+    file = FileAttente(lambda: pilote)
+    file.demarrer()
+    historique = Historique(tmp_path / "historique.db")
+    service = ServiceCowork(file, historique, lambda d, p, a: Executeur(d, 5, 8000, lancer=lent, processus=p, arret=a),
+                            REGLAGES, fabrique_processus)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    historique.ajouter_message(conv.id, "toi", "cinq commandes")
+    service.demarrer(conv.id, str(tmp_path), None, "cinq commandes", None, None)
+    while not lances:
+        time.sleep(0.02)
+    service.arreter(conv.id)
+    evs = evenements(service, conv.id)
+    assert len(lances) < 5 and fin(evs)["type"] == "arret"
     file.arreter()

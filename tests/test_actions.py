@@ -216,3 +216,26 @@ def test_edit_garde_les_fins_de_ligne_crlf(ex, tmp_path):
     (tmp_path / "a.py").write_bytes(b"un\r\ndeux\r\n")
     assert ex.executer(Action("edit", {"path": "a.py", "old": "un\ndeux", "new": "un\ntrois"})).ok
     assert (tmp_path / "a.py").read_bytes() == b"un\r\ntrois\r\n"
+
+
+def test_powershell_arrete_par_l_utilisateur(tmp_path):
+    import threading
+    import time
+
+    script = tmp_path / "long.py"
+    script.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+    arret = threading.Event()
+    threading.Timer(1.0, arret.set).start()
+    debut = time.monotonic()
+    code, sortie = lancer_powershell("python long.py", tmp_path, 60, arret=arret)
+    assert time.monotonic() - debut < 10 and code != 0 and "stopped by the user" in sortie
+
+
+def test_executeur_transmet_l_arret(tmp_path):
+    import threading
+
+    recus = []
+    arret = threading.Event()
+    ex = Executeur(tmp_path, 5, 8000, lancer=lambda texte, dossier, delai, arret=None: recus.append(arret) or (0, "x"), arret=arret)
+    ex.executer(Action("run", {"command": "dir"}))
+    assert recus == [arret]

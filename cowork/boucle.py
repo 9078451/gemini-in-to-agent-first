@@ -41,6 +41,7 @@ class Branchements:
     classer: Callable[[Action], Verdict]
     demander_accord: Callable[[Action, str], bool]
     emettre: Callable[[dict], None]
+    doit_arreter: Callable[[], bool] = lambda: False  # « Arrêter » coupe aussi un lot en cours
 
 
 def executer_tache(message: str, tache: EtatTache, b: Branchements, r: Reglages) -> None:
@@ -94,11 +95,13 @@ def _traiter_lot(actions: list[Action], tache: EtatTache, b: Branchements, r: Re
         notes.append(f"Only the first {r.max_actions} actions were run; send the rest in your next message.")
         actions = actions[: r.max_actions]
     lignes: list[LigneResultat] = []
-    echec = False
+    echec, raison_saut = False, "an earlier action failed"
     for rang, action in enumerate(actions, 1):
         dernier = rang == len(actions)
+        if not echec and b.doit_arreter():
+            echec, raison_saut = True, "stopped by the user"
         if echec:
-            _sauter(b, lignes, rang, action, "an earlier action failed")
+            _sauter(b, lignes, rang, action, raison_saut)
             continue
         erreur = valider(action)
         if erreur:

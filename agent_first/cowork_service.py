@@ -69,7 +69,7 @@ class ServiceCowork:
         self,
         file: FileAttente,
         historique: Historique,
-        fabrique_executeur: Callable[[Path, GestionnaireProcessus], Executeur],
+        fabrique_executeur: Callable[[Path, GestionnaireProcessus, threading.Event], Executeur],
         reglages: Reglages,
         fabrique_processus: Callable[[Path, Callable[[list[dict]], None]], GestionnaireProcessus],
         delai_accord: float = 600.0,
@@ -110,7 +110,7 @@ class ServiceCowork:
             self._ranger()
         dossier_travail = Path(dossier)
         processus = self._processus_de(conversation_id, dossier_travail)
-        executeur = self._fabrique_executeur(dossier_travail, processus)
+        executeur = self._fabrique_executeur(dossier_travail, processus, session.arret)
         session.tache, message = self._preparer(conversation_id, dossier_travail, texte, processus)
         self._emettre(conversation_id, session, {"type": "statut", "statut": "queued"})
 
@@ -137,6 +137,7 @@ class ServiceCowork:
                         classer=classer,
                         demander_accord=lambda action, raison: self._demander(conversation_id, session, action),
                         emettre=lambda ev: self._emettre(conversation_id, session, ev),
+                        doit_arreter=session.arret.is_set,
                     ),
                     self._reglages,
                 )

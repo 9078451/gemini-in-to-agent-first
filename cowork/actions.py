@@ -11,6 +11,8 @@ import difflib
 import os
 import shutil
 import subprocess
+import threading
+import time
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -45,9 +47,10 @@ def tuer_arbre(pid: int) -> None:
     subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
 
 
-def lancer_powershell(texte: str, dossier: Path, delai: float) -> tuple[int, str]:
+def lancer_powershell(texte: str, dossier: Path, delai: float, arret: threading.Event | None = None) -> tuple[int, str]:
     """Lance une commande PowerShell dans `dossier` ; renvoie (code, sortie).
-    Au-delà de `delai`, tout l'arbre de processus est tué et TimeoutExpired relevée."""
+    Au-delà de `delai`, tout l'arbre de processus est tué et TimeoutExpired relevée ;
+    si `arret` est levé (bouton Arrêter), il est tué aussitôt."""
     processus = subprocess.Popen(
         commande_powershell(texte),
         cwd=dossier,
@@ -59,16 +62,23 @@ def lancer_powershell(texte: str, dossier: Path, delai: float) -> tuple[int, str
         encoding="utf-8",
         errors="replace",
     )
-    try:
-        sortie, erreurs = processus.communicate(timeout=delai)
-    except subprocess.TimeoutExpired:
-        tuer_arbre(processus.pid)
+    fin = time.monotonic() + delai
+    while True:
         try:
-            processus.communicate(timeout=5)
+            sortie, erreurs = processus.communicate(timeout=min(0.5, max(0.0, fin - time.monotonic())))
+            return processus.returncode, (sortie or "") + (erreurs or "")
         except subprocess.TimeoutExpired:
-            pass
-        raise
-    return processus.returncode, (sortie or "") + (erreurs or "")
+            arrete = arret is not None and arret.is_set()
+            if not arrete and time.monotonic() < fin:
+                continue
+            tuer_arbre(processus.pid)
+            try:
+                sortie, erreurs = processus.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                sortie, erreurs = "", ""
+            if not arrete:
+                raise
+            return processus.returncode or 1, f"{sortie or ''}{erreurs or ''}\n(stopped by the user)".strip()
 
 
 class Executeur:
@@ -81,7 +91,9 @@ class Executeur:
         processus: "GestionnaireProcessus | None" = None,
         ports_interdits: frozenset[int] = frozenset(),
         delai_visite: float = 10.0,
+        arret: threading.Event | None = None,
     ) -> None:
+        self._arret = arret  # levé par « Arrêter » : coupe une commande en cours
         self._dossier = dossier
         self._delai = delai
         self._taille_max = taille_max
@@ -202,7 +214,10 @@ class Executeur:
 
     def _commande(self, c: dict) -> Resultat:
         try:
-            code, sortie = self._lancer(c["command"], self._dossier, self._delai)
+            if self._arret is None:
+                code, sortie = self._lancer(c["command"], self._dossier, self._delai)
+            else:
+                code, sortie = self._lancer(c["command"], self._dossier, self._delai, arret=self._arret)
         except subprocess.TimeoutExpired:
             return Resultat(
                 False,
