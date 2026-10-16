@@ -77,3 +77,13 @@ def test_vers_api():
                        "report": {"created": ["a"], "commands": [{"text": "dir", "exit_code": 0}], "unfinished_steps": []}}
     assert vers_api({"type": "question", "question": "?", "tache": {"plan": []}}) == {"type": "question", "question": "?"}
     assert vers_api({"type": "demande", "action": "delete", "raison": "x"})["type"] == "approval_required"
+
+
+def test_choisir_adresse_prefere_le_reseau_local():
+    from agent_first.openai_compat import choisir_adresse
+
+    # Vrai cas : la route par défaut passe par un VPN (100.x), VirtualBox ajoute 192.168.56.1.
+    assert choisir_adresse("100.120.238.218", ["100.120.238.218", "192.168.1.160", "192.168.56.1"]) == "192.168.1.160"
+    assert choisir_adresse("10.0.0.5", ["192.168.56.1", "10.0.0.5"]) == "10.0.0.5"
+    assert choisir_adresse(None, ["127.0.0.1", "169.254.3.4", "100.64.1.1"]) == "100.64.1.1"
+    assert choisir_adresse(None, []) == "127.0.0.1"

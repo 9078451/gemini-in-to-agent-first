@@ -69,6 +69,7 @@ kbd { padding: 0 5px; border: 1px solid var(--bordure-2); border-radius: 4px; co
 .marque { display: grid; place-items: center; flex: none; width: 12px; color: var(--texte-3); }
 .marque svg { width: 12px; height: 12px; }
 .marque.en-cours::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulser 1.4s ease-in-out infinite; }
+.marque.attente::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ambre); animation: pulser 1.4s ease-in-out infinite; }
 .vide { padding: 8px 10px; color: var(--texte-3); font-size: 12.5px; }
 .barre-bas { display: flex; align-items: center; gap: 2px; margin-top: 6px; padding: 8px 2px 0 10px; border-top: 1px solid var(--bordure); }
 .etat-gemini { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; color: var(--texte-2); font-size: 12px; white-space: nowrap; }
@@ -122,6 +123,13 @@ kbd { padding: 0 5px; border: 1px solid var(--bordure-2); border-radius: 4px; co
 .chemin:hover { background: var(--survol); color: var(--texte-2); }
 .chemin svg { width: 13px; height: 13px; }
 #nom-dossier { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* processus lancés par Cowork (serveurs…) */
+.processus { display: flex; gap: 6px; flex: 0 1 auto; min-width: 0; }
+.pilule-processus { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 1px 3px 1px 9px; border: 1px solid var(--bordure-2); border-radius: 999px; color: var(--texte-2); font: 11.5px var(--police-mono); }
+.point-processus { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--vert); }
+.pilule-commande { overflow: hidden; max-width: 220px; text-overflow: ellipsis; white-space: nowrap; }
+.pilule-arreter { flex: none; padding: 0 7px; border-radius: 999px; color: var(--accent); font: 11.5px var(--police); }
+.pilule-arreter:hover { background: var(--survol); }
 .discussion-entete .segments { margin-left: auto; }
 .fil { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 24px 24px 12px; }
 .fil > * { width: 100%; max-width: var(--largeur); margin-left: auto; margin-right: auto; flex: none; }
@@ -140,7 +148,7 @@ kbd { padding: 0 5px; border: 1px solid var(--bordure-2); border-radius: 4px; co
 .bulle.attente { display: flex; align-items: center; gap: 10px; color: var(--texte-2); font: 12.5px var(--police-mono); }
 .points { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulser 1.4s ease-in-out infinite; }
 @keyframes pulser { 50% { opacity: .3; } }
-@media (prefers-reduced-motion: reduce) { .points, .marque.en-cours::before, .point-etat.attente { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .points, .marque.en-cours::before, .marque.attente::before, .point-etat.attente { animation: none; } }
 
 /* réponses de Gemini (HTML nettoyé par Agent First) : du texte, sans carte autour */
 .markdown { color: #dedbd6; line-height: 1.65; overflow-wrap: anywhere; }
@@ -188,6 +196,37 @@ kbd { padding: 0 5px; border: 1px solid var(--bordure-2); border-radius: 4px; co
 .etape-corps { max-height: 300px; overflow: auto; margin: 2px 0 6px 2px; padding: 6px 12px; background: var(--barre); border-left: 1px solid var(--bordure-2); color: var(--texte-2); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .etape-note { display: flex; align-items: center; gap: 8px; padding: 3px 0; color: var(--texte-2); font: 12.5px var(--police); }
 .etape-note .etape-detail { font-family: var(--police-mono); font-size: 12px; }
+.etape-note > span:nth-child(2) { flex: none; white-space: nowrap; } /* le titre reste sur une ligne ; le détail se coupe */
+.etape.sautee { display: flex; align-items: center; gap: 8px; padding: 3px 0; opacity: .5; }
+.etape-corps .contexte { color: var(--texte-3); }
+.etape-corps .repere { color: var(--texte-3); font-style: italic; }
+.format-casse > summary { display: flex; align-items: center; gap: 8px; padding: 3px 0; list-style: none; color: var(--texte-2); font: 12.5px var(--police); cursor: default; }
+.format-casse > summary::-webkit-details-marker { display: none; }
+.format-casse:has(.etape-corps) > summary { cursor: pointer; }
+.format-casse .etape-info { margin-left: 4px; text-decoration: underline dotted; }
+
+/* plan, bilan et question */
+.carte-plan, .carte-bilan { padding: 10px 14px; border: 1px solid var(--bordure); border-radius: 8px; font-size: 13px; }
+.plan-titre, .bilan-titre { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; color: var(--texte-2); font-size: 12px; }
+.plan-avancement, .bilan-compteurs { color: var(--texte-3); font-family: var(--police-mono); }
+.plan-liste { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.plan-liste li { display: flex; align-items: baseline; gap: 9px; }
+.plan-liste li.fait { color: var(--texte-2); }
+.plan-case { display: inline-grid; place-items: center; flex: none; width: 13px; height: 13px; border: 1px solid var(--bordure-2); border-radius: 3px; color: var(--vert); font-size: 10px; line-height: 1; transform: translateY(2px); }
+.plan-liste li.fait .plan-case { border-color: var(--vert); }
+.bilan-fichiers { display: flex; flex-wrap: wrap; gap: 2px 14px; font: 12px var(--police-mono); }
+.bilan-fichier { color: var(--texte-2); }
+.bilan-fichier.plus { color: var(--vert); }
+.bilan-fichier.moins { color: var(--rouge); }
+.bilan-fichier:hover { text-decoration: underline; }
+.bilan-echec { margin-top: 4px; color: var(--rouge); font: 12px var(--police-mono); }
+.bilan-alerte { margin-top: 4px; color: var(--ambre); font-size: 12.5px; }
+.bilan-processus { margin-top: 4px; color: var(--texte-2); font: 12px var(--police-mono); }
+.carte-question { padding: 10px 14px; background: #241f1c; border: 1px solid #4d3a2e; border-radius: 8px; font-size: 13px; }
+.question-titre { display: flex; align-items: center; gap: 8px; color: var(--accent); font-size: 12.5px; }
+.question-titre svg { width: 15px; height: 15px; }
+.question-texte { margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.question-aide { margin-top: 6px; color: var(--texte-3); font-size: 12px; }
 
 /* demande d'accord */
 .accord { padding: 10px 14px; background: #26221d; border: 1px solid #4a3a2a; border-radius: 8px; font-size: 13px; }
@@ -239,6 +278,12 @@ kbd { padding: 0 5px; border: 1px solid var(--bordure-2); border-radius: 4px; co
 .pastille { position: absolute; right: max(26px, calc((100% - var(--largeur)) / 2 + 2px)); bottom: 10px; z-index: 5; display: flex; align-items: center; gap: 6px; max-width: 45%; color: var(--texte-3); font-size: 11.5px; line-height: 1.55; }
 #pastille-texte { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* une tâche attend un accord ailleurs (API réseau, autre conversation) */
+.bandeau { position: absolute; top: 54px; left: 50%; z-index: 6; display: flex; align-items: center; gap: 10px; padding: 5px 6px 5px 12px; background: #26221d; border: 1px solid #4a3a2a; border-radius: 8px; color: var(--ambre); font-size: 12.5px; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); transform: translateX(-50%); }
+.bandeau svg { width: 14px; height: 14px; }
+.bandeau button { padding: 2px 10px; border: 1px solid #4a3a2a; border-radius: 6px; color: var(--texte); }
+.bandeau button:hover { background: var(--survol); }
+
 /* paramètres */
 dialog { width: min(420px, calc(100vw - 32px)); padding: 0; background: var(--fond); border: 1px solid var(--bordure-2); border-radius: 10px; color: var(--texte); }
 dialog::backdrop { background: rgba(0, 0, 0, .5); }
@@ -250,3 +295,10 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
 .note { color: var(--texte-3); font-size: 12px; }
 .etats { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid var(--bordure); }
 .etat { display: flex; align-items: center; gap: 8px; color: var(--texte-2); font-size: 12.5px; }
+.api-reseau { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--bordure); }
+.api-reseau:empty { display: none; }
+.api-reseau h3 { margin: 0; font-size: 13px; font-weight: 500; }
+.ligne-api { display: flex; align-items: center; gap: 8px; color: var(--texte-2); font-size: 12.5px; }
+.ligne-api-nom { flex: none; width: 56px; }
+.ligne-api code { flex: 1; min-width: 0; overflow: hidden; color: var(--texte); font: 12px var(--police-mono); text-overflow: ellipsis; white-space: nowrap; }
+.api-reseau .bouton-secondaire { align-self: flex-start; margin-top: 2px; }

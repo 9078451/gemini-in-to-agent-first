@@ -1,13 +1,13 @@
 // agent.first — état, affichage et événements de l'app.
 import { appeler } from "./api.js";
 import { cheminCourt, choixDisponible, formaterDate, formaterDuree, groupesParDate, limiteOption, metaMessage, titreDepuis } from "./outils.js";
-import { libelleEtape, nombreLignes, resumeDiff } from "./outils_cowork.js";
+import { avancementPlan, infoResultat, libelleEtape, lignesBilan, nombreLignes, normaliserAction, resumeDiff } from "./outils_cowork.js";
 
 const $ = (id) => document.getElementById(id);
 const CLE_DEFAUT = "agent.first.defaut";
 const CLE_BARRE = "agent.first.barre-repliee";
 const CLE_DOSSIER = "agent.first.dossier";
-const FIN_DE_TACHE = ["termine", "limite", "arret", "erreur"];
+const FIN_DE_TACHE = ["termine", "limite", "arret", "erreur", "question"];
 const VERT = "var(--vert)";
 const ORANGE = "var(--ambre)";
 const ROUGE = "var(--rouge)";
@@ -28,7 +28,10 @@ const etat = {
   serveur: null, // dernière réponse de /api/etat (null = Agent First injoignable)
   mode: "chat", // « chat » ou « cowork »
   dossier: null, // dossier de travail (mode Cowork)
-  tache: null, // conversation dont une tâche Cowork tourne
+  tache: null, // conversation dont une tâche Cowork est suivie en direct
+  flux: null, // EventSource de cette tâche
+  actives: new Set(), // conversations dont une tâche tourne (app ou API réseau)
+  attentes: new Set(), // conversations dont une tâche attend un accord
 };
 
 // ---------- outils ----------
@@ -190,11 +193,13 @@ async function chargerConversations() {
     for (const c of groupe.conversations) {
       const bouton = element("button", "conversation");
       bouton.type = "button";
-      bouton.title = c.mode === "cowork" ? `Cowork · ${c.titre}` : c.titre;
+      bouton.title = [c.mode === "cowork" ? "Cowork" : null, c.source === "api" ? "API" : null, c.titre].filter(Boolean).join(" · ");
       bouton.classList.toggle("actif", c.id === etat.courante);
-      // marque : point qui pulse si une tâche Cowork tourne, sinon terminal pour Cowork, rien pour Chat
+      // marque : point ambre si une tâche attend un accord, point qui pulse si elle tourne,
+      // sinon terminal pour Cowork, rien pour Chat
       const marque = element("span", "marque");
-      if (c.id === etat.tache) marque.classList.add("en-cours");
+      if (etat.attentes.has(c.id)) marque.classList.add("attente");
+      else if (c.id === etat.tache || etat.actives.has(c.id)) marque.classList.add("en-cours");
       else if (c.mode === "cowork") marque.append(icone("i-terminal"));
       bouton.append(marque, element("span", "conversation-titre", c.titre || "Sans titre"));
       bouton.addEventListener("click", () => ouvrirConversation(c.id));
@@ -253,9 +258,9 @@ function accueilDiscussion() {
     const aide = element("p");
     if (etat.dossier) {
       aide.append(
-        document.createTextNode("Gemini lit, crée et modifie des fichiers et lance des commandes dans "),
+        document.createTextNode("Gemini fait un plan, lit, crée et modifie des fichiers, lance des commandes et des serveurs dans "),
         element("code", null, cheminCourt(etat.dossier)),
-        document.createTextNode(". Les actions risquées attendent ton accord."),
+        document.createTextNode(", puis vérifie son travail. Les actions risquées attendent ton accord."),
       );
       bloc.append(aide);
     } else {
@@ -281,6 +286,7 @@ function nouvelleConversation() {
   const defaut = lire(CLE_DEFAUT, {});
   choisirReglages(defaut.modele, defaut.niveau);
   dessinerMode();
+  dessinerProcessus([]);
   $("fil").replaceChildren(accueilDiscussion());
   afficherVue("discussion");
   chargerConversations();
@@ -289,7 +295,7 @@ function nouvelleConversation() {
 
 async function ouvrirConversation(identifiant) {
   try {
-    const { conversation, messages } = await appeler("GET", `/api/conversations/${identifiant}`);
+    const { conversation, messages, tache } = await appeler("GET", `/api/conversations/${identifiant}`);
     etat.courante = conversation.id;
     etat.mode = conversation.mode ?? "chat";
     etat.dossier = conversation.dossier ?? null;
@@ -299,13 +305,19 @@ async function ouvrirConversation(identifiant) {
     const fil = $("fil");
     fil.replaceChildren();
     const ajouter = creerRenduCowork(fil, false);
-    for (const m of messages) {
+    // Tâche en cours : ses étapes viendront du flux (rejouées, accord compris) ; ici, seulement ce qui précède.
+    const fin = tache?.en_cours ? messages.map((m) => m.role).lastIndexOf("toi") + 1 : messages.length;
+    for (const m of messages.slice(0, fin)) {
       if (m.role === "cowork") ajouter(JSON.parse(m.details));
       else fil.append(bulle(m));
     }
     afficherVue("discussion");
     defilerEnBas();
-    chargerConversations();
+    dessinerProcessus([]);
+    if (etat.mode === "cowork") chargerProcessus(conversation.id);
+    if (tache?.en_cours) ecouterFlux(conversation.id, 0);
+    else chargerConversations();
+    dessinerBandeau();
     $("saisie").focus();
   } catch (e) {
     signaler(e.message, ROUGE);
@@ -370,12 +382,13 @@ async function envoyer() {
 
 // ---------- Cowork ----------
 
-// Une étape = une ligne monospace : point d'état, verbe (Write, Edit, Shell…), détail, info, et un
+// Une étape = une ligne monospace : point d'état, verbe (Write, Edit, Run…), détail, info, et un
 // contenu qu'on peut déplier (diff, sortie de commande, fichier écrit).
 function ligneEtape(ev, interactif) {
   const { verbe, detail } = libelleEtape(ev);
+  const { action, champs } = normaliserAction(ev);
   const etape = element("details", "etape");
-  etape.dataset.action = ev.action;
+  etape.dataset.action = action;
   etape.dataset.detail = detail;
   const resume = element("summary");
   resume.title = detail;
@@ -389,11 +402,20 @@ function ligneEtape(ev, interactif) {
     chevron,
   );
   etape.append(resume);
-  if (ev.action === "creer") {
-    resume.querySelector(".etape-info").textContent = nombreLignes(ev.champs?.contenu);
-    if (ev.champs?.contenu) ajouterCorps(etape, ev.champs.contenu, false);
+  if (action === "create") {
+    resume.querySelector(".etape-info").textContent = nombreLignes(champs.content);
+    if (champs.content) ajouterCorps(etape, champs.content, false);
   }
   return etape;
+}
+
+// Action non exécutée parce qu'une action précédente du même message a échoué.
+function ligneSautee(ev) {
+  const { verbe, detail } = libelleEtape(ev);
+  const ligne = element("div", "etape sautee");
+  ligne.title = "Non exécutée : une action précédente du même message a échoué";
+  ligne.append(element("span", "point-etat"), element("span", "etape-verbe", verbe), element("span", "etape-detail", detail), element("span", "etape-info", "sautée"));
+  return ligne;
 }
 
 function ajouterCorps(etape, texte, ouvert) {
@@ -409,18 +431,26 @@ function marquerEtape(etape, etatPoint) {
   etape.querySelector(".point-etat").className = `point-etat ${etatPoint}`;
 }
 
+function afficherDiff(corps, diff) {
+  for (const ligne of diff.split("\n")) {
+    const classe = ligne.startsWith("@@") ? "repere" : ligne.startsWith("+") ? "plus" : ligne.startsWith("-") ? "moins" : "contexte";
+    corps.append(element("div", classe, ligne));
+  }
+}
+
 function ajouterResultat(etape, ev) {
   marquerEtape(etape, ev.ok ? "ok" : "ko");
   const info = etape.querySelector(".etape-info");
+  const action = etape.dataset.action;
   if (ev.diff) {
     const { plus, moins } = resumeDiff(ev.diff);
     info.replaceChildren(element("span", "plus", `+${plus}`), document.createTextNode(" "), element("span", "moins", `−${moins}`));
-    const corps = ajouterCorps(etape, "", true);
-    for (const ligne of ev.diff.split("\n")) corps.append(element("div", ligne.startsWith("-") ? "moins" : "plus", ligne));
+    afficherDiff(ajouterCorps(etape, "", action === "edit"), ev.diff); // une réécriture complète reste repliée
   } else if (!ev.ok) {
+    info.textContent = ev.code ? `code ${ev.code}` : infoResultat(action, ev.corps) || "échec";
     ajouterCorps(etape, ev.corps, true);
-  } else if (["commande", "lire", "chercher", "lister"].includes(etape.dataset.action)) {
-    if (etape.dataset.action === "lire") info.textContent = nombreLignes(ev.corps);
+  } else if (["run", "read", "search", "list", "visit", "start", "logs", "stop"].includes(action)) {
+    info.textContent = infoResultat(action, ev.corps);
     ajouterCorps(etape, ev.corps, false);
   }
 }
@@ -435,6 +465,19 @@ function noteEtape(ev, etatPoint) {
     note.title = detail;
   }
   return note;
+}
+
+// Réponse hors format : repliée, avec ce que Gemini a écrit (pour comprendre ce qui s'est passé).
+function noteFormat(ev) {
+  const bloc = element("details", "format-casse");
+  const resume = element("summary");
+  resume.append(element("span", "point-etat decision"), element("span", null, libelleEtape(ev).titre));
+  bloc.append(resume);
+  if (ev.corps) {
+    resume.append(element("span", "etape-info", "voir ce qu'il a écrit"));
+    bloc.append(element("div", "etape-corps", ev.corps));
+  }
+  return bloc;
 }
 
 function carteDemande(ev, detail, interactif) {
@@ -474,11 +517,84 @@ function carteDemande(ev, detail, interactif) {
   return carte;
 }
 
+function remplirPlan(carte, etapes) {
+  const { faites, total } = avancementPlan(etapes);
+  const titre = element("div", "plan-titre");
+  titre.append(element("span", null, "Plan"), element("span", "plan-avancement", `${faites}/${total}`));
+  const liste = element("ul", "plan-liste");
+  for (const e of etapes) {
+    const ligne = element("li", e.fait ? "fait" : null);
+    ligne.append(element("span", "plan-case", e.fait ? "✓" : ""), element("span", null, e.texte));
+    liste.append(ligne);
+  }
+  carte.replaceChildren(titre, liste);
+}
+
+// La carte de plan à mettre à jour : la dernière du fil, si aucun message de l'utilisateur ne la suit.
+function cartePlanCourante(conteneur) {
+  const cartes = conteneur.querySelectorAll(":scope > .carte-plan");
+  const derniere = cartes[cartes.length - 1];
+  for (let suivant = derniere?.nextElementSibling; suivant; suivant = suivant.nextElementSibling) {
+    if (suivant.matches(".bulle.toi")) return null;
+  }
+  return derniere ?? null;
+}
+
+function bilanVide(bilan) {
+  return !bilan || (!bilan.crees?.length && !bilan.modifies?.length && !bilan.supprimes?.length
+    && !bilan.commandes?.length && !bilan.verifications && !bilan.plan_inacheve?.length && !bilan.processus?.length);
+}
+
+// Ce qu'Agent First a constaté, indépendamment de ce que Gemini annonce.
+function carteBilan(bilan) {
+  const { compteurs, fichiers } = lignesBilan(bilan);
+  const carte = element("div", "carte-bilan");
+  const titre = element("div", "bilan-titre");
+  titre.append(element("span", null, "Bilan d'Agent First"), element("span", "bilan-compteurs", compteurs));
+  carte.append(titre);
+  if (fichiers.length) {
+    const liste = element("div", "bilan-fichiers");
+    for (const { signe, chemin } of fichiers) {
+      const classe = { "+": "plus", "~": "modif", "−": "moins" }[signe];
+      const bouton = element("button", `bilan-fichier ${classe}`, `${signe} ${chemin}`);
+      bouton.type = "button";
+      bouton.title = "Voir l'étape correspondante";
+      bouton.addEventListener("click", () => montrerEtape(chemin));
+      liste.append(bouton);
+    }
+    carte.append(liste);
+  }
+  for (const c of bilan.commandes ?? []) {
+    if (c.code !== null && c.code !== undefined && c.code !== 0) carte.append(element("div", "bilan-echec", `✗ ${c.texte} (code ${c.code})`));
+  }
+  if (bilan.plan_inacheve?.length) carte.append(element("div", "bilan-alerte", `Étapes du plan non cochées : ${bilan.plan_inacheve.join(" ; ")}`));
+  for (const p of bilan.processus ?? []) carte.append(element("div", "bilan-processus", `● #${p.id} ${p.commande} tourne encore`));
+  return carte;
+}
+
+function montrerEtape(chemin) {
+  const etapes = [...$("fil").querySelectorAll("details.etape")].filter((e) => e.dataset.detail === chemin);
+  const derniere = etapes[etapes.length - 1];
+  if (!derniere) return;
+  if (derniere.classList.contains("a-corps")) derniere.open = true;
+  derniere.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function carteQuestion(ev, interactif) {
+  const carte = element("div", "carte-question");
+  const titre = element("div", "question-titre");
+  titre.append(icone("i-messages"), element("span", null, "Gemini te demande"));
+  carte.append(titre, element("div", "question-texte", ev.question));
+  if (interactif) carte.append(element("div", "question-aide", "Réponds dans la zone de saisie : Gemini reprendra la tâche là où il s'est arrêté."));
+  return carte;
+}
+
 // Affiche les étapes d'une tâche dans `conteneur` ; `interactif` = tâche en direct (boutons d'accord actifs).
 // Les lignes qui se suivent sont regroupées pour rester serrées, comme dans un terminal.
 function creerRenduCowork(conteneur, interactif) {
   let groupe = null;
   let derniere = null; // ligne « action » qui recevra son résultat
+  let accordOuvert = null; // boutons d'une demande d'accord encore sans réponse
   const ajouterLigne = (ligne) => {
     if (!groupe || conteneur.lastElementChild !== groupe) {
       groupe = element("div", "groupe-etapes");
@@ -486,20 +602,49 @@ function creerRenduCowork(conteneur, interactif) {
     }
     groupe.append(ligne);
   };
+  const ajouterBilan = (bilan) => {
+    if (!bilanVide(bilan)) conteneur.append(carteBilan(bilan));
+  };
   return (ev) => {
+    if (ev.type === "statut") return;
+    if (ev.type === "processus") {
+      if (interactif) dessinerProcessus(ev.liste);
+      return;
+    }
+    // La tâche avance : une demande restée ouverte a été tranchée ailleurs (API, autre fenêtre).
+    if (accordOuvert?.isConnected) accordOuvert.replaceWith(element("div", "accord-decision", "Décision prise."));
+    accordOuvert = null;
     if (ev.type === "action") {
       derniere = ligneEtape(ev, interactif);
       ajouterLigne(derniere);
     } else if (ev.type === "resultat") {
       if (derniere) ajouterResultat(derniere, ev);
+    } else if (ev.type === "saute") {
+      ajouterLigne(ligneSautee(ev));
+    } else if (ev.type === "plan") {
+      const carte = cartePlanCourante(conteneur);
+      if (carte) remplirPlan(carte, ev.etapes);
+      else {
+        const nouvelle = element("div", "carte-plan");
+        remplirPlan(nouvelle, ev.etapes);
+        conteneur.append(nouvelle);
+      }
     } else if (ev.type === "demande") {
       if (derniere) marquerEtape(derniere, "decision");
-      conteneur.append(carteDemande(ev, derniere?.dataset.detail ?? "", interactif));
+      const carte = carteDemande(ev, derniere?.dataset.detail ?? "", interactif);
+      conteneur.append(carte);
+      accordOuvert = carte.querySelector(".accord-actions");
+    } else if (ev.type === "erreur_format") {
+      ajouterLigne(noteFormat(ev));
+    } else if (ev.type === "question") {
+      conteneur.append(carteQuestion(ev, interactif));
     } else if (ev.type === "termine") {
       conteneur.append(bulle({ role: "gemini", texte: ev.resume.replace(/^TERMINÉ\s*:\s*/, ""), modele: null, niveau: null, duree: null }));
+      ajouterBilan(ev.bilan);
     } else {
       if (ev.type === "refus" && derniere) marquerEtape(derniere, "ko");
-      ajouterLigne(noteEtape(ev, ["autorise", "erreur_format", "erreur_gemini"].includes(ev.type) ? "decision" : "ko"));
+      ajouterLigne(noteEtape(ev, ["autorise", "erreur_gemini", "relance_fin"].includes(ev.type) ? "decision" : "ko"));
+      if (FIN_DE_TACHE.includes(ev.type)) ajouterBilan(ev.bilan);
     }
     defilerEnBas();
   };
@@ -542,15 +687,22 @@ async function envoyerCowork(texte) {
   ecouterFlux(etat.courante);
 }
 
-function ecouterFlux(identifiant) {
+// Suit une tâche en direct. Rouvrir une conversation dont la tâche tourne rejoue ses étapes (depuis 0).
+function ecouterFlux(identifiant, depuis = 0) {
+  etat.flux?.close();
   const ajouter = creerRenduCowork($("fil"), true);
   etat.tache = identifiant;
+  etat.occupe = true;
+  $("form-saisie").classList.add("occupe");
   $("arreter").hidden = false;
   chargerConversations(); // la conversation apparaît tout de suite, avec son point « en cours »
-  const source = new EventSource(`/api/cowork/${identifiant}/flux`);
+  let actions = 0;
+  const source = new EventSource(`/api/cowork/${identifiant}/flux?depuis=${depuis}`);
+  etat.flux = source;
   source.onmessage = (message) => {
     const ev = JSON.parse(message.data);
     if (etat.courante === identifiant) ajouter(ev); // seulement si la conversation est encore affichée
+    if (ev.type === "action") actions += 1;
     if (FIN_DE_TACHE.includes(ev.type)) {
       source.close();
       if (etat.courante === identifiant) {
@@ -560,11 +712,15 @@ function ecouterFlux(identifiant) {
       finirCowork();
       if (ev.type === "erreur" && /est bloqué/.test(ev.corps)) chargerModes();
       if (ev.type === "termine") signaler("Gemini prêt", VERT);
-      else signaler(libelleEtape(ev).titre, ROUGE);
-    } else if (ev.type === "demande") {
-      signaler("En attente de ta décision", ORANGE);
-    } else {
-      signaler(`Cowork travaille… étape ${ev.etape + 1}`, ORANGE);
+      else if (ev.type === "question") {
+        signaler("Gemini attend ta réponse", ORANGE);
+        if (etat.courante === identifiant) $("saisie").focus();
+      } else signaler(libelleEtape(ev).titre, ROUGE);
+    } else if (ev.type === "statut") {
+      if (ev.statut === "waiting_approval") signaler("En attente de ta décision", ORANGE);
+      if (ev.statut === "queued") signaler("En file d'attente : Gemini termine une autre demande…", ORANGE);
+    } else if (ev.type !== "processus" && ev.type !== "demande") {
+      signaler(`Cowork travaille… ${actions} action${actions > 1 ? "s" : ""}`, ORANGE);
     }
   };
   source.onerror = () => {
@@ -579,6 +735,7 @@ function ecouterFlux(identifiant) {
 function finirCowork() {
   etat.occupe = false;
   etat.tache = null;
+  etat.flux = null;
   $("form-saisie").classList.remove("occupe");
   $("arreter").hidden = true;
   chargerConversations();
@@ -592,6 +749,71 @@ async function arreterTache() {
   } catch (e) {
     signaler(e.message, ROUGE);
   }
+}
+
+// Processus lancés par Cowork (serveurs…) : une pastille par processus actif dans l'en-tête.
+function dessinerProcessus(liste) {
+  const zone = $("processus");
+  const actifs = (liste ?? []).filter((p) => p.actif);
+  zone.replaceChildren(
+    ...actifs.map((p) => {
+      const pilule = element("span", "pilule-processus");
+      pilule.title = `${p.commande}\nlancé il y a ${formaterDuree((Date.now() - new Date(p.depuis)) / 1000)}`;
+      const arreter = element("button", "pilule-arreter", "Arrêter");
+      arreter.type = "button";
+      arreter.addEventListener("click", () => arreterProcessus(p.id));
+      pilule.append(element("span", "point-processus"), element("span", "pilule-commande", `#${p.id} ${p.commande}`), arreter);
+      return pilule;
+    }),
+  );
+  zone.hidden = !actifs.length;
+}
+
+async function chargerProcessus(identifiant) {
+  try {
+    const { processus } = await appeler("GET", `/api/cowork/${identifiant}/processus`);
+    if (etat.courante === identifiant) dessinerProcessus(processus);
+  } catch {
+    // Agent First injoignable : l'en-tête reste vide
+  }
+}
+
+async function arreterProcessus(numero) {
+  try {
+    const r = await appeler("POST", `/api/cowork/${etat.courante}/processus/${numero}/arreter`);
+    dessinerProcessus(r.processus);
+    signaler(r.ok ? `Processus #${numero} arrêté` : r.corps, r.ok ? VERT : ROUGE);
+  } catch (e) {
+    signaler(e.message, ROUGE);
+  }
+}
+
+// Tâches qui tournent ailleurs (API réseau, autre conversation) : marque dans la barre et bandeau
+// si l'une attend un accord.
+function ecouterEvenements() {
+  const source = new EventSource("/api/evenements");
+  source.onmessage = (message) => {
+    const ev = JSON.parse(message.data);
+    if (ev.type === "processus") {
+      if (ev.conversation_id === etat.courante) dessinerProcessus(ev.liste);
+      return;
+    }
+    const id = ev.conversation_id;
+    const avant = `${etat.actives.has(id)}${etat.attentes.has(id)}`;
+    if (ev.statut === "waiting_approval") etat.attentes.add(id);
+    else etat.attentes.delete(id);
+    if (["queued", "running", "waiting_approval"].includes(ev.statut)) etat.actives.add(id);
+    else etat.actives.delete(id);
+    if (avant !== `${etat.actives.has(id)}${etat.attentes.has(id)}`) chargerConversations();
+    dessinerBandeau();
+  };
+  // En cas de coupure, EventSource se reconnecte tout seul.
+}
+
+function dessinerBandeau() {
+  const ailleurs = [...etat.attentes].find((id) => !(id === etat.tache && id === etat.courante));
+  $("bandeau-accord").hidden = !ailleurs;
+  $("bandeau-accord").dataset.conversation = ailleurs ?? "";
 }
 
 function dessinerMode() {
@@ -691,7 +913,8 @@ function dessinerLignes(conversations, recherche) {
       supprimer.setAttribute("aria-label", `Retirer « ${c.titre} » de l'historique`);
       supprimer.append(icone("i-corbeille"));
       supprimer.addEventListener("click", () => supprimerConversation(c));
-      ligne.append(ouvrir, element("span", "ligne-mode", c.mode === "cowork" ? "cowork" : "chat"), infos, supprimer);
+      const mode = (c.mode === "cowork" ? "cowork" : "chat") + (c.source === "api" ? " · api" : "");
+      ligne.append(ouvrir, element("span", "ligne-mode", mode), infos, supprimer);
       return ligne;
     }),
   );
@@ -735,7 +958,62 @@ function ouvrirParametres() {
       return ligne;
     }),
   );
+  dessinerApiReseau();
   $("parametres").showModal();
+}
+
+async function dessinerApiReseau() {
+  const zone = $("api-reseau");
+  let infos;
+  try {
+    infos = await appeler("GET", "/api/api-reseau");
+  } catch {
+    zone.replaceChildren();
+    return;
+  }
+  const titre = element("h3", null, "API réseau");
+  if (!infos.active) {
+    zone.replaceChildren(titre, element("p", "note", "Désactivée. Pour l'activer : API_ACTIVE = True dans config.py, puis redémarre Agent First."));
+    return;
+  }
+  const regenerer = element("button", "bouton-secondaire", "Régénérer la clé");
+  regenerer.type = "button";
+  regenerer.addEventListener("click", async () => {
+    if (!confirm("Créer une nouvelle clé ?\nLes programmes qui utilisent l'ancienne devront être mis à jour.")) return;
+    try {
+      await appeler("POST", "/api/api-reseau/cle");
+      dessinerApiReseau();
+      signaler("Nouvelle clé créée", VERT);
+    } catch (e) {
+      signaler(e.message, ROUGE);
+    }
+  });
+  zone.replaceChildren(
+    titre,
+    ligneApi("Adresse", infos.adresse, infos.adresse),
+    ligneApi("Clé", `••••••••${infos.cle.slice(-4)}`, infos.cle),
+    element("p", "note", "Pour d'autres programmes, sur ce PC ou ton réseau : format OpenAI (/v1/chat/completions) et tâches Cowork (/v1/cowork), avec l'en-tête Authorization: Bearer <clé>. Exemples dans le README."),
+    regenerer,
+  );
+}
+
+function ligneApi(nom, affiche, aCopier) {
+  const ligne = element("div", "ligne-api");
+  const copier = element("button", "icone");
+  copier.type = "button";
+  copier.title = `Copier : ${nom.toLowerCase()}`;
+  copier.setAttribute("aria-label", copier.title);
+  copier.append(icone("i-copier"));
+  copier.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(aCopier);
+      signaler(`${nom} copiée`, VERT);
+    } catch {
+      signaler("Copie impossible", ROUGE);
+    }
+  });
+  ligne.append(element("span", "ligne-api-nom", nom), element("code", null, affiche), copier);
+  return ligne;
 }
 
 function sauverDefaut() {
@@ -763,6 +1041,10 @@ function brancherEvenements() {
   });
   $("choisir-dossier").addEventListener("click", choisirDossier);
   $("arreter").addEventListener("click", arreterTache);
+  $("bandeau-ouvrir").addEventListener("click", () => {
+    const id = $("bandeau-accord").dataset.conversation;
+    if (id) ouvrirConversation(id);
+  });
   $("replier").addEventListener("click", basculerBarre);
   $("deplier").addEventListener("click", basculerBarre);
   $("bouton-modele").addEventListener("click", () => basculerMenu("bouton-modele"));
@@ -822,6 +1104,7 @@ async function demarrer() {
   await verifierEtat();
   chargerConversations();
   chargerAccueil();
+  ecouterEvenements();
   await chargerModes();
   const defaut = lire(CLE_DEFAUT, {});
   choisirReglages(defaut.modele, defaut.niveau);

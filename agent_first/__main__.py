@@ -87,7 +87,7 @@ def main() -> None:
         garde = GardeCle(config.FICHIER_CLE_API, essais_max=config.ESSAIS_CLE_MAX)
         adresse_api = f"http://{adresse_reseau()}:{config.PORT_API}/v1"
         api = creer_api_reseau(file, historique, cowork, garde, cache_modes, config.DELAI_AGENT)
-        serveur_api = uvicorn.Server(uvicorn.Config(api, host=config.HOTE_API, port=config.PORT_API, log_level="warning"))
+        serveur_api = uvicorn.Server(uvicorn.Config(api, host=config.HOTE_API, port=config.PORT_API, log_level="warning", timeout_graceful_shutdown=3))
         threading.Thread(target=serveur_api.run, name="api-reseau", daemon=True).start()
         logging.getLogger("agent_first").info("API réseau : %s (clé dans Paramètres ou %s)", adresse_api, config.FICHIER_CLE_API)
     app = creer_app(
@@ -101,7 +101,8 @@ def main() -> None:
             target=ouvrir_quand_pret, args=(config.CHEMIN_CHROME, url, lambda: repond(url)), daemon=True
         ).start()
     try:
-        uvicorn.run(app, host=config.HOTE_AGENT, port=config.PORT_AGENT)
+        # Les flux en direct (SSE) restent ouverts tant que l'app est affichée : sans délai, l'arrêt les attendrait.
+        uvicorn.run(app, host=config.HOTE_AGENT, port=config.PORT_AGENT, timeout_graceful_shutdown=3)
     finally:
         if serveur_api is not None:
             serveur_api.should_exit = True

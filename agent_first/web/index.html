@@ -88,6 +88,7 @@
         <button class="chemin" id="choisir-dossier" type="button" title="Choisir le dossier de travail" hidden>
           <svg><use href="#i-dossier"/></svg><span id="nom-dossier">Choisir un dossier</span>
         </button>
+        <div class="processus" id="processus" aria-label="Processus lancés par Cowork" hidden></div>
         <div class="segments" id="modes" role="radiogroup" aria-label="Mode">
           <button type="button" data-mode="chat" class="actif">Chat</button>
           <button type="button" data-mode="cowork">Cowork</button>
@@ -118,6 +119,11 @@
       </div>
     </section>
 
+    <div class="bandeau" id="bandeau-accord" role="alert" hidden>
+      <svg><use href="#i-alerte"/></svg><span>Une tâche Cowork attend ton accord</span>
+      <button type="button" id="bandeau-ouvrir">Ouvrir</button>
+    </div>
+
     <div class="pastille" id="pastille" role="status"><span class="point" id="pastille-point"></span><span id="pastille-texte">Connexion…</span></div>
   </main>
 
@@ -131,6 +137,7 @@
       <label>Niveau de réflexion par défaut<select id="defaut-niveau"></select></label>
       <p class="note">S'appliquent aux nouvelles conversations. Gardés dans ce navigateur.</p>
       <div class="etats" id="etats"></div>
+      <section class="api-reseau" id="api-reseau"></section>
     </form>
   </dialog>
 </body>

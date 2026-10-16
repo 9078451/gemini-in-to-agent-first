@@ -126,10 +126,33 @@ def vers_api(valeur):
 
 
 def adresse_reseau() -> str:
-    """L'adresse du PC sur le réseau local (aucun paquet n'est envoyé)."""
+    """L'adresse du PC sur le réseau local, à donner aux autres appareils (aucun paquet n'est envoyé)."""
+    par_defaut = None
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("10.255.255.255", 1))
-            return s.getsockname()[0]
+            par_defaut = s.getsockname()[0]
     except OSError:
-        return "127.0.0.1"
+        pass
+    try:
+        toutes = [info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)]
+    except OSError:
+        toutes = []
+    return choisir_adresse(par_defaut, toutes)
+
+
+def choisir_adresse(par_defaut: str | None, toutes: list[str]) -> str:
+    """La route par défaut peut passer par un VPN (100.x) : on préfère une adresse privée du
+    réseau local, et en dernier l'adaptateur de VirtualBox (192.168.56.x)."""
+
+    def rang(adresse: str) -> int:
+        if adresse.startswith("192.168.56."):
+            return 2
+        if adresse.startswith("192.168."):
+            return 0
+        if adresse.startswith("10.") or re.match(r"172\.(1[6-9]|2\d|3[01])\.", adresse):
+            return 1
+        return 3
+
+    candidates = [a for a in dict.fromkeys([par_defaut, *toutes]) if a and not a.startswith(("127.", "169.254."))]
+    return min(candidates, key=rang) if candidates else "127.0.0.1"
