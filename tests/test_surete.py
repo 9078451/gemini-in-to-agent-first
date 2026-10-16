@@ -39,3 +39,27 @@ def test_commande_inconnue_dangereuse():
 
 def test_raison_presente():
     assert classer(cmd("git push")).raison != ""
+
+
+def test_enchainement_non_sur_dangereux():
+    for t in ("dir; Set-Content C:/x y", "dir | Out-File C:/x", "git status && rm x", "dir & copy a C:/b"):
+        assert classer(cmd(t)).dangereuse is True, t
+
+
+def test_enchainement_sur():
+    for t in ("dir | findstr txt", "git status; git diff"):
+        assert classer(cmd(t)).dangereuse is False, t
+
+
+def test_redirection_dangereuse():
+    assert classer(cmd("echo x > C:/Windows/a.txt")).dangereuse is True
+    assert classer(cmd("type a.txt >> b.txt")).dangereuse is True
+
+
+def test_redirection_des_erreurs_sure():
+    assert classer(cmd("npm test 2>&1")).dangereuse is False
+
+
+def test_git_destructif_dangereux():
+    for t in ("git clean -fdx", "git reset --hard", "git checkout -- .", "pip uninstall requests -y"):
+        assert classer(cmd(t)).dangereuse is True, t

@@ -73,3 +73,14 @@ def test_commande_trop_longue(tmp_path):
 def test_sortie_coupee(tmp_path):
     ex = Executeur(tmp_path, 5, 10, lancer=lambda *a: (0, "x" * 50))
     assert len(ex.executer(Action("commande", {"texte": "x"})).corps) < 50
+
+
+def test_chercher_ne_sort_pas_du_dossier(ex, tmp_path):
+    secret = tmp_path.parent / f"secret-{tmp_path.name}.txt"
+    secret.write_text("motdepasse", encoding="utf-8")
+    try:
+        r = ex.executer(Action("chercher", {"motif": "motdepasse", "glob": "../*"}))
+        assert "motdepasse" not in r.corps
+        assert r.ok is False and "hors du dossier" in r.corps
+    finally:
+        secret.unlink()

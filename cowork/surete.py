@@ -34,7 +34,14 @@ MOTIFS_DANGEREUX: list[tuple[str, str]] = [
     (r"invoke-webrequest|iwr\b|curl\b|wget\b|invoke-restmethod", "accès réseau"),
     (r"invoke-expression|iex\b", "exécution de code dynamique"),
     (r"git\s+push", "publication vers un dépôt distant"),
-    (r"pip\s+install|npm\s+install\s+-g|npm\s+i\s+-g|winget|choco|msiexec|scoop", "installation de logiciel"),
+    (
+        r"git\s+(clean|reset\s+--hard|checkout\s+(--|\.)|restore|rm\b|branch\s+-d|stash\s+(drop|clear))",
+        "commande git qui efface du travail",
+    ),
+    (
+        r"pip\s+(install|uninstall)|npm\s+(install|i|uninstall)\s+-g|winget|choco|msiexec|scoop",
+        "installation ou désinstallation de logiciel",
+    ),
     (r"new-itemproperty|disable-|enable-.*firewall|netsh", "modification système ou réseau"),
 ]
 
@@ -47,12 +54,24 @@ def classer(action: Action) -> Verdict:
     return Verdict(False)
 
 
+# Séparateurs de commandes enchaînées : chaque morceau est vérifié.
+_SEPARATEURS = re.compile(r";|&&|\|\||\||&|\n")
+# Redirections sans risque : erreurs vers la sortie, sortie jetée.
+_REDIRECTIONS_SURES = re.compile(r"\d?>&\d|\d?>\s*(\$null|nul)\b")
+
+
 def analyser_commande(texte: str) -> Verdict:
     bas = texte.strip().lower()
     for motif, raison in MOTIFS_DANGEREUX:
         if re.search(motif, bas):
             return Verdict(True, raison)
-    premier = re.split(r"[\s;|&]", bas, maxsplit=1)[0]
-    if premier in COMMANDES_SURES:
-        return Verdict(False)
-    return Verdict(True, "commande non reconnue")
+    nettoye = _REDIRECTIONS_SURES.sub("", bas)
+    if ">" in nettoye:
+        return Verdict(True, "écriture dans un fichier par redirection")
+    for morceau in _SEPARATEURS.split(nettoye):
+        morceau = morceau.strip()
+        if not morceau:
+            continue
+        if morceau.split()[0] not in COMMANDES_SURES:
+            return Verdict(True, "commande non reconnue")
+    return Verdict(False)

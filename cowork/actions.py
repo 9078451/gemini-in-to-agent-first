@@ -88,9 +88,12 @@ class Executeur:
         return Resultat(False, f"action inconnue : {action.nom}")
 
     def _chercher(self, motif: str, glob: str) -> Resultat:
+        if ".." in glob.replace("\\", "/").split("/") or Path(glob).is_absolute() or Path(glob).drive:
+            raise HorsDossier(glob)
+        racine = self._dossier.resolve()
         lignes = []
         for fichier in self._dossier.glob(glob):
-            if not fichier.is_file():
+            if not fichier.is_file() or not fichier.resolve().is_relative_to(racine):
                 continue
             try:
                 for i, ligne in enumerate(fichier.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
