@@ -31,7 +31,6 @@ class _Session:
         self.accord = threading.Event()
         self.reponse_accord = False
         self.action_en_attente = ""
-        self.toujours: set[str] = set()
         self.arret = threading.Event()
         self.etape = 0
 
@@ -53,6 +52,8 @@ class ServiceCowork:
         self._echecs_max = echecs_max
         self._taille_max = taille_max
         self._sessions: dict[str, _Session] = {}
+        # Types d'action autorisés « toujours » : valent pour toute la conversation.
+        self._toujours: dict[str, set[str]] = {}
 
     def demarrer(
         self, conversation_id: str, dossier: str, adresse: str | None, texte: str, modele, niveau
@@ -81,7 +82,7 @@ class ServiceCowork:
                     message_initial=message,
                     executer=executeur.executer,
                     classer=classer,
-                    demander_accord=lambda action, raison: self._demander(session, action),
+                    demander_accord=lambda action, raison: self._demander(conversation_id, session, action),
                     emettre=lambda ev: self._emettre(conversation_id, session, ev),
                     max_etapes=self._max_etapes,
                     echecs_max=self._echecs_max,
@@ -104,6 +105,9 @@ class ServiceCowork:
         while True:
             evenement = session.file.get()
             if evenement is None:
+                # Tâche finie : une reconnexion du navigateur ne doit plus rien attendre.
+                if self._sessions.get(conversation_id) is session:
+                    del self._sessions[conversation_id]
                 return
             yield f"data: {json.dumps(evenement, ensure_ascii=False)}\n\n"
 
@@ -113,7 +117,7 @@ class ServiceCowork:
             return
         session.reponse_accord = reponse == "continuer"
         if toujours and session.reponse_accord:
-            session.toujours.add(session.action_en_attente)
+            self._toujours.setdefault(conversation_id, set()).add(session.action_en_attente)
         session.accord.set()
 
     def arreter(self, conversation_id: str) -> None:
@@ -123,8 +127,8 @@ class ServiceCowork:
         session.arret.set()
         session.accord.set()  # débloque un accord en attente
 
-    def _demander(self, session: _Session, action: Action) -> bool:
-        if action.nom in session.toujours:
+    def _demander(self, conversation_id: str, session: _Session, action: Action) -> bool:
+        if action.nom in self._toujours.get(conversation_id, set()):
             return True
         session.action_en_attente = action.nom
         session.accord.clear()
@@ -134,6 +138,9 @@ class ServiceCowork:
         return session.reponse_accord
 
     def _emettre(self, conversation_id: str, session: _Session, evenement: dict) -> None:
+        if evenement["type"] == "demande" and evenement.get("action") in self._toujours.get(conversation_id, set()):
+            # Déjà autorisée « toujours » : pas de carte d'accord, mais l'action reste visible.
+            evenement = {**evenement, "type": "autorise"}
         evenement = {**evenement, "etape": session.etape}
         session.etape += 1
         try:

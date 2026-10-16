@@ -112,3 +112,50 @@ def test_decision_debloque_une_action_dangereuse(tmp_path):
     fil.join(timeout=5)
     assert not (tmp_path / "a.txt").exists()
     file.arreter()
+
+
+def test_flux_apres_la_fin_ne_bloque_pas(tmp_path):
+    client, file, historique, service = monter(tmp_path, ["TERMINÉ : rien à faire"])
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "rien"})
+    evenements(service, conv.id)  # premier flux, jusqu'à la fin
+    second = []
+    fil = threading.Thread(target=drainer_dans, args=(service, conv.id, second), daemon=True)
+    fil.start()
+    fil.join(timeout=2)  # une reconnexion du navigateur ne doit pas rester bloquée
+    assert not fil.is_alive()
+    assert second == []
+    file.arreter()
+
+
+def test_toujours_autoriser_vaut_pour_la_conversation(tmp_path):
+    for nom in ("a.txt", "b.txt"):
+        (tmp_path / nom).write_text("x", encoding="utf-8")
+    reponses = [
+        '```json\n{"action":"supprimer","chemin":"a.txt"}\n```', "TERMINÉ",
+        '```json\n{"action":"supprimer","chemin":"b.txt"}\n```', "TERMINÉ",
+    ]
+    client, file, historique, service = monter(tmp_path, reponses)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    collectes = []
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "supprime a"})
+    fil = threading.Thread(target=drainer_dans, args=(service, conv.id, collectes))
+    fil.start()
+    for _ in range(50):
+        if any(e["type"] == "demande" for e in collectes):
+            break
+        time.sleep(0.05)
+    demande = next(e for e in collectes if e["type"] == "demande")
+    client.post(f"/api/cowork/{conv.id}/decision",
+                json={"etape": demande["etape"], "reponse": "continuer", "toujours": True})
+    fil.join(timeout=5)
+    # 2e tâche dans la même conversation : la suppression passe sans demander
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "supprime b"})
+    seconde = []
+    fil = threading.Thread(target=drainer_dans, args=(service, conv.id, seconde), daemon=True)
+    fil.start()
+    fil.join(timeout=5)
+    assert "demande" not in [e["type"] for e in seconde]
+    assert "autorise" in [e["type"] for e in seconde]  # l'utilisateur voit quand même passer l'action
+    assert not (tmp_path / "b.txt").exists()
+    file.arreter()

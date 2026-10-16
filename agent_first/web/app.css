@@ -195,3 +195,40 @@ dialog::backdrop { background: rgba(0, 0, 0, .55); }
 .note { color: var(--texte-3); font-size: 12px; }
 .etats { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--bordure); }
 .etat { display: flex; align-items: center; gap: 10px; color: var(--texte-2); }
+
+/* ---------- mode Cowork ---------- */
+.entete-gauche { display: flex; align-items: center; gap: 14px; min-width: 0; }
+#modes button { padding: 4px 12px; }
+.ligne-dossier { display: flex; align-items: center; gap: 10px; width: calc(100% - 64px); max-width: 860px; margin: 12px auto 0; }
+.ligne-dossier .pilule { max-width: 100%; overflow: hidden; }
+#nom-dossier { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--police-mono); font-size: 12px; }
+.pilule.arreter { margin-left: auto; color: var(--rouge); border-color: #5a2328; }
+.pilule.arreter:hover { background: var(--rouge-fond); }
+.conversation.cowork::before { content: "Cowork · "; color: var(--vert); font-size: 12px; }
+
+.etape { padding: 9px 14px; background: var(--carte); border: 1px solid var(--bordure); border-radius: 14px; }
+.etape-ligne { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.etape-ligne svg { color: var(--texte-2); }
+.etape-titre { flex: none; }
+.etape-detail { overflow: hidden; color: var(--texte-2); font: 12px var(--police-mono); text-overflow: ellipsis; white-space: nowrap; }
+.etape-statut { margin-left: auto; flex: none; }
+.etape-statut.ok { color: var(--vert); }
+.etape-statut.ko { color: var(--rouge); }
+.etape .diff { margin-top: 8px; padding: 8px 12px; background: #0f0f12; border-radius: 10px; font: 12px/1.5 var(--police-mono); white-space: pre-wrap; overflow-x: auto; }
+.diff .moins { color: var(--rouge); }
+.diff .plus { color: var(--vert); }
+.etape details { margin-top: 6px; color: var(--texte-2); font-size: 12px; }
+.etape details pre { max-height: 260px; overflow: auto; margin: 6px 0 0; padding: 8px 12px; background: #0f0f12; border-radius: 10px; font: 12px/1.5 var(--police-mono); white-space: pre-wrap; }
+.etape.info { background: none; border-style: dashed; color: var(--texte-2); }
+.etape.erreur-etape { border-color: #5a2328; }
+
+.etape.demande { padding: 12px 16px; background: var(--rouge-fond); border-color: #7a2b31; }
+.etape.demande .etape-ligne { color: var(--rouge); font-weight: 600; }
+.etape.demande .etape-ligne svg { color: var(--rouge); }
+.demande-code { display: block; margin: 8px 0; padding: 8px 12px; background: #0f0f12; border-radius: 10px; color: #ffd6d6; font: 12px var(--police-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.demande-raison { color: #e4b4b4; }
+.demande-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 10px; }
+.demande-actions label { display: flex; align-items: center; gap: 6px; margin-right: auto; color: #e4b4b4; font-size: 12px; }
+.bouton-refuser { padding: 6px 14px; border: 1px solid #5a2328; border-radius: 10px; color: #ffd6d6; }
+.bouton-continuer { padding: 6px 14px; border-radius: 10px; background: var(--rouge); color: var(--rouge-fond); font-weight: 600; }
+.demande-decision { margin-top: 8px; color: #e4b4b4; font-size: 12px; }

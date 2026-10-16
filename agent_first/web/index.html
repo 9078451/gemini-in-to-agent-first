@@ -25,6 +25,13 @@
     <symbol id="i-graphique" viewBox="0 0 24 24"><path d="M4 19.5h16M5.5 15l4-4.5 3.5 3 5.5-6.5"/></symbol>
     <symbol id="i-horloge" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
     <symbol id="i-fermer" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+    <symbol id="i-dossier" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-fichier" viewBox="0 0 24 24"><path d="M14 3.5H7.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8z"/><path d="M14 3.5V8h4.5"/></symbol>
+    <symbol id="i-crayon" viewBox="0 0 24 24"><path d="M4 20h4L18.5 9.5a2.8 2.8 0 0 0-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M5 8l4 4-4 4M11 17h8"/></symbol>
+    <symbol id="i-alerte" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.5v.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></symbol>
   </svg>
 
   <aside class="barre">
@@ -89,7 +96,13 @@
 
     <section class="vue" id="vue-discussion" hidden>
       <header class="discussion-entete">
-        <h2 id="titre-conversation">Nouvelle conversation</h2>
+        <div class="entete-gauche">
+          <div class="segments" id="modes" role="radiogroup" aria-label="Mode">
+            <button type="button" data-mode="chat" class="actif">Chat</button>
+            <button type="button" data-mode="cowork">Cowork</button>
+          </div>
+          <h2 id="titre-conversation">Nouvelle conversation</h2>
+        </div>
         <div class="reglages">
           <div class="menu-modele">
             <button class="pilule" id="bouton-modele" type="button" aria-haspopup="listbox" aria-expanded="false">
@@ -100,6 +113,14 @@
           <div class="segments" id="niveaux" role="radiogroup" aria-label="Niveau de réflexion"></div>
         </div>
       </header>
+      <div class="ligne-dossier" id="ligne-dossier" hidden>
+        <button class="pilule" id="choisir-dossier" type="button" title="Choisir le dossier de travail">
+          <svg class="accent"><use href="#i-dossier"/></svg><span id="nom-dossier">Choisir un dossier de travail</span>
+        </button>
+        <button class="pilule arreter" id="arreter" type="button" hidden>
+          <svg><use href="#i-stop"/></svg>Arrêter
+        </button>
+      </div>
       <div class="fil" id="fil"></div>
       <form class="saisie" id="form-saisie">
         <textarea id="saisie" rows="1" placeholder="Demande à Gemini…" aria-label="Ton message"></textarea>

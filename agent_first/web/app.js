@@ -1,10 +1,13 @@
 // agent.first — état, affichage et événements de l'app.
 import { appeler } from "./api.js";
 import { formaterDate, formaterDuree, groupesParDate, metaMessage, titreDepuis } from "./outils.js";
+import { libelleEtape } from "./outils_cowork.js";
 
 const $ = (id) => document.getElementById(id);
 const CLE_DEFAUT = "agent.first.defaut";
 const CLE_BARRE = "agent.first.barre-repliee";
+const CLE_DOSSIER = "agent.first.dossier";
+const FIN_DE_TACHE = ["termine", "limite", "arret", "erreur"];
 const VERT = "var(--vert)";
 const ORANGE = "var(--orange)";
 const ROUGE = "var(--rouge)";
@@ -23,6 +26,9 @@ const etat = {
   occupe: false,
   periode: "7j",
   serveur: null, // dernière réponse de /api/etat (null = Agent First injoignable)
+  mode: "chat", // « chat » ou « cowork »
+  dossier: null, // dossier de travail (mode Cowork)
+  tache: null, // conversation dont une tâche Cowork tourne
 };
 
 // ---------- outils ----------
@@ -186,6 +192,7 @@ async function chargerConversations() {
       bouton.type = "button";
       bouton.title = c.titre;
       bouton.classList.toggle("actif", c.id === etat.courante);
+      bouton.classList.toggle("cowork", c.mode === "cowork");
       bouton.addEventListener("click", () => ouvrirConversation(c.id));
       contenu.push(bouton);
     }
@@ -242,6 +249,15 @@ function bulle(message) {
 
 function accueilDiscussion() {
   const bloc = element("div", "vide-discussion");
+  if (etat.mode === "cowork") {
+    const titre = element("h1", null, "Travaille avec ");
+    titre.append(element("span", "accent", "Gemini"), document.createTextNode(" sur ton PC"));
+    const aide = etat.dossier
+      ? "Décris la tâche : Gemini lira, créera et modifiera des fichiers et lancera des commandes dans ce dossier."
+      : "Choisis d'abord le dossier de travail, puis décris la tâche.";
+    bloc.append(titre, element("p", null, aide));
+    return bloc;
+  }
   const titre = element("h1", null, "Discute avec ");
   titre.append(element("span", "accent", "Gemini"));
   bloc.append(titre, element("p", null, "Choisis un modèle et un niveau de réflexion, puis pose ta question."));
@@ -250,9 +266,11 @@ function accueilDiscussion() {
 
 function nouvelleConversation() {
   etat.courante = null;
+  if (etat.mode === "cowork") etat.dossier = lire(CLE_DOSSIER, null);
   $("titre-conversation").textContent = "Nouvelle conversation";
   const defaut = lire(CLE_DEFAUT, {});
   choisirReglages(defaut.modele, defaut.niveau);
+  dessinerMode();
   $("fil").replaceChildren(accueilDiscussion());
   afficherVue("discussion");
   chargerConversations();
@@ -263,9 +281,18 @@ async function ouvrirConversation(identifiant) {
   try {
     const { conversation, messages } = await appeler("GET", `/api/conversations/${identifiant}`);
     etat.courante = conversation.id;
+    etat.mode = conversation.mode ?? "chat";
+    etat.dossier = conversation.dossier ?? null;
     $("titre-conversation").textContent = conversation.titre || "Conversation";
     choisirReglages(conversation.modele, conversation.niveau);
-    $("fil").replaceChildren(...messages.map(bulle));
+    dessinerMode();
+    const fil = $("fil");
+    fil.replaceChildren();
+    const ajouter = creerRenduCowork(fil, false);
+    for (const m of messages) {
+      if (m.role === "cowork") ajouter(JSON.parse(m.details));
+      else fil.append(bulle(m));
+    }
     afficherVue("discussion");
     defilerEnBas();
     chargerConversations();
@@ -278,6 +305,7 @@ async function ouvrirConversation(identifiant) {
 async function envoyer() {
   const texte = $("saisie").value.trim();
   if (!texte || etat.occupe) return;
+  if (etat.mode === "cowork") return envoyerCowork(texte);
   etat.occupe = true;
   $("form-saisie").classList.add("occupe");
   $("saisie").value = "";
@@ -327,6 +355,216 @@ async function envoyer() {
     $("form-saisie").classList.remove("occupe");
     defilerEnBas();
     chargerConversations();
+  }
+}
+
+// ---------- Cowork ----------
+
+function carteEtape(nomIcone, titre, detail, classe) {
+  const carte = element("div", classe);
+  const ligne = element("div", "etape-ligne");
+  ligne.append(icone(nomIcone), element("span", "etape-titre", titre));
+  if (detail) ligne.append(element("span", "etape-detail", detail));
+  carte.append(ligne);
+  return carte;
+}
+
+function ajouterResultat(carte, ev) {
+  const statut = element("span", `etape-statut ${ev.ok ? "ok" : "ko"}`);
+  statut.append(icone(ev.ok ? "i-check" : "i-alerte"));
+  carte.querySelector(".etape-ligne").append(statut);
+  if (ev.diff) {
+    const diff = element("div", "diff");
+    for (const ligne of ev.diff.split("\n")) diff.append(element("div", ligne.startsWith("-") ? "moins" : "plus", ligne));
+    carte.append(diff);
+  } else if (!ev.ok || ["commande", "lire", "chercher", "lister"].includes(carte.dataset.action)) {
+    const details = element("details");
+    details.open = !ev.ok;
+    details.append(element("summary", null, ev.ok ? "Voir le résultat" : "Erreur"), element("pre", null, ev.corps));
+    carte.append(details);
+  }
+}
+
+function carteDemande(ev, detail, interactif) {
+  const carte = carteEtape("i-alerte", libelleEtape(ev).titre, "", "etape demande");
+  if (detail) carte.append(element("code", "demande-code", detail));
+  carte.append(element("div", "demande-raison", `Pourquoi : ${ev.raison}.`));
+  if (!interactif) {
+    carte.append(element("div", "demande-decision", "Décision déjà prise."));
+    return carte;
+  }
+  const actions = element("div", "demande-actions");
+  const toujours = element("label");
+  const caseToujours = element("input");
+  caseToujours.type = "checkbox";
+  toujours.append(caseToujours, document.createTextNode("Toujours autoriser ce type ici"));
+  const refuser = element("button", "bouton-refuser", "Refuser");
+  refuser.type = "button";
+  const continuer = element("button", "bouton-continuer", "Continuer");
+  continuer.type = "button";
+  const decider = async (reponse) => {
+    actions.replaceWith(
+      element("div", "demande-decision", reponse === "continuer" ? "Tu as autorisé cette action." : "Tu as refusé cette action."),
+    );
+    signaler("Cowork travaille…", ORANGE);
+    try {
+      await appeler("POST", `/api/cowork/${etat.tache}/decision`, { etape: ev.etape, reponse, toujours: caseToujours.checked });
+    } catch (e) {
+      signaler(e.message, ROUGE);
+    }
+  };
+  refuser.addEventListener("click", () => decider("refuser"));
+  continuer.addEventListener("click", () => decider("continuer"));
+  actions.append(toujours, refuser, continuer);
+  carte.append(actions);
+  return carte;
+}
+
+// Affiche les étapes d'une tâche dans `conteneur` ; `interactif` = boutons d'accord actifs.
+function creerRenduCowork(conteneur, interactif) {
+  let derniereAction = null; // carte « action » qui recevra son résultat
+  return (ev) => {
+    const { icone: nomIcone, titre, detail } = libelleEtape(ev);
+    if (ev.type === "action") {
+      derniereAction = carteEtape(nomIcone, titre, detail, "etape");
+      derniereAction.dataset.action = ev.action;
+      derniereAction.dataset.detail = detail;
+      conteneur.append(derniereAction);
+    } else if (ev.type === "resultat") {
+      if (derniereAction) ajouterResultat(derniereAction, ev);
+    } else if (ev.type === "demande") {
+      conteneur.append(carteDemande(ev, derniereAction?.dataset.detail ?? "", interactif));
+    } else if (ev.type === "termine") {
+      conteneur.append(bulle({ role: "gemini", texte: ev.resume.replace(/^TERMINÉ\s*:\s*/, ""), modele: null, niveau: null, duree: null }));
+    } else {
+      conteneur.append(carteEtape(nomIcone, titre, detail, ev.type === "erreur" ? "etape info erreur-etape" : "etape info"));
+    }
+    defilerEnBas();
+  };
+}
+
+async function envoyerCowork(texte) {
+  if (!etat.dossier) {
+    signaler("Choisis d'abord un dossier de travail", ROUGE);
+    return;
+  }
+  etat.occupe = true;
+  $("form-saisie").classList.add("occupe");
+  $("saisie").value = "";
+  ajusterSaisie();
+  const fil = $("fil");
+  fil.querySelector(".vide-discussion")?.remove();
+  fil.append(bulle({ role: "toi", texte }));
+  if (!etat.courante) $("titre-conversation").textContent = titreDepuis(texte);
+  defilerEnBas();
+  signaler("Cowork travaille…", ORANGE);
+  try {
+    if (!etat.courante) {
+      const conversation = await appeler("POST", "/api/conversations", {
+        mode: "cowork",
+        dossier: etat.dossier,
+        modele: etat.modele,
+        niveau: etat.niveau,
+      });
+      etat.courante = conversation.id;
+    }
+    await appeler("POST", `/api/cowork/${etat.courante}/messages`, { texte });
+    chargerConversations(); // la conversation apparaît tout de suite dans la barre latérale
+  } catch (e) {
+    fil.append(bulle({ role: "erreur", texte: e.message }));
+    $("saisie").value = texte; // pour pouvoir le renvoyer
+    ajusterSaisie();
+    signaler(e.message === "Agent First n'est pas démarré." ? "Agent First arrêté" : "Erreur", ROUGE);
+    finirCowork();
+    return;
+  }
+  ecouterFlux(etat.courante);
+}
+
+function ecouterFlux(identifiant) {
+  const ajouter = creerRenduCowork($("fil"), true);
+  etat.tache = identifiant;
+  $("arreter").hidden = false;
+  const source = new EventSource(`/api/cowork/${identifiant}/flux`);
+  source.onmessage = (message) => {
+    const ev = JSON.parse(message.data);
+    if (etat.courante === identifiant) ajouter(ev); // seulement si la conversation est encore affichée
+    if (FIN_DE_TACHE.includes(ev.type)) {
+      source.close();
+      finirCowork();
+      if (ev.type === "termine") signaler("Gemini prêt", VERT);
+      else signaler(libelleEtape(ev).titre, ROUGE);
+    } else if (ev.type === "demande") {
+      signaler("En attente de ta décision", ORANGE);
+    } else {
+      signaler(`Cowork travaille… étape ${ev.etape + 1}`, ORANGE);
+    }
+  };
+  source.onerror = () => {
+    source.close(); // pas de reconnexion automatique
+    if (etat.tache === identifiant) {
+      finirCowork();
+      signaler("Flux interrompu (Agent First arrêté ?)", ROUGE);
+    }
+  };
+}
+
+function finirCowork() {
+  etat.occupe = false;
+  etat.tache = null;
+  $("form-saisie").classList.remove("occupe");
+  $("arreter").hidden = true;
+  chargerConversations();
+}
+
+async function arreterTache() {
+  if (!etat.tache) return;
+  try {
+    await appeler("POST", `/api/cowork/${etat.tache}/arreter`);
+    signaler("Arrêt demandé (après l'étape en cours)…", ORANGE);
+  } catch (e) {
+    signaler(e.message, ROUGE);
+  }
+}
+
+function dessinerMode() {
+  $("modes").querySelectorAll("button").forEach((b) => b.classList.toggle("actif", b.dataset.mode === etat.mode));
+  $("ligne-dossier").hidden = etat.mode !== "cowork";
+  $("nom-dossier").textContent = etat.dossier ?? "Choisir un dossier de travail";
+  $("choisir-dossier").title = etat.dossier ?? "Choisir le dossier de travail";
+  $("saisie").placeholder = etat.mode === "cowork" ? "Décris une tâche à Cowork…" : "Demande à Gemini…";
+}
+
+function choisirMode(mode) {
+  if (etat.occupe) {
+    signaler("Attends la fin de la tâche en cours", ORANGE);
+    return;
+  }
+  if (mode === etat.mode && !etat.courante) return;
+  etat.mode = mode;
+  nouvelleConversation();
+}
+
+async function choisirDossier() {
+  if (etat.occupe) return;
+  try {
+    signaler("Choisis le dossier dans la fenêtre Windows…", ORANGE);
+    const { dossier } = await appeler("POST", "/api/dossiers/choisir");
+    if (!dossier) {
+      signaler("Aucun dossier choisi", GRIS);
+      return;
+    }
+    ecrire(CLE_DOSSIER, dossier);
+    if (etat.courante && dossier !== etat.dossier) {
+      nouvelleConversation(); // un autre dossier = une nouvelle conversation
+    } else {
+      etat.dossier = dossier;
+      dessinerMode();
+      $("fil").querySelector(".vide-discussion")?.replaceWith(accueilDiscussion());
+    }
+    signaler("Dossier de travail choisi", VERT);
+  } catch (e) {
+    signaler(e.message, ROUGE);
   }
 }
 
@@ -456,6 +694,12 @@ function brancherEvenements() {
     $("panneau-historique").scrollIntoView({ behavior: "smooth" });
   });
   $("ouvrir-parametres").addEventListener("click", ouvrirParametres);
+  $("modes").addEventListener("click", (e) => {
+    const bouton = e.target.closest("[data-mode]");
+    if (bouton) choisirMode(bouton.dataset.mode);
+  });
+  $("choisir-dossier").addEventListener("click", choisirDossier);
+  $("arreter").addEventListener("click", arreterTache);
   $("replier").addEventListener("click", basculerBarre);
   $("deplier").addEventListener("click", basculerBarre);
   $("bouton-modele").addEventListener("click", basculerMenu);
@@ -505,6 +749,7 @@ function brancherEvenements() {
 async function demarrer() {
   if (lire(CLE_BARRE, false)) document.body.classList.add("barre-repliee");
   brancherEvenements();
+  dessinerMode();
   afficherVue("accueil");
   signaler("Connexion…", GRIS);
   await verifierEtat();
