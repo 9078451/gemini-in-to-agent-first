@@ -68,6 +68,18 @@ export function limiteOption(option) {
   return trouve ? trouve[1] : null;
 }
 
+// Le choix à afficher : `nom` s'il existe et n'est pas bloqué ; sinon l'option active, ou la
+// première, parmi celles qui sont libres. Si tout est bloqué, on garde `nom` (ou l'active) :
+// Gemini dira alors clairement jusqu'à quand.
+export function choixDisponible(liste, nom) {
+  const libres = liste.filter((o) => !limiteOption(o));
+  if (libres.some((o) => o.nom === nom)) return nom;
+  const repli = libres.find((o) => o.actif) ?? libres[0];
+  if (repli) return repli.nom;
+  if (liste.some((o) => o.nom === nom)) return nom;
+  return (liste.find((o) => o.actif) ?? liste[0])?.nom ?? null;
+}
+
 // « C:\Users\nom\Desktop\site » → « ~\Desktop\site » ; les autres chemins restent tels quels.
 export function cheminCourt(chemin) {
   return chemin.replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/i, "~");

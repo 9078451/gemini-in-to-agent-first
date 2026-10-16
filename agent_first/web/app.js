@@ -1,6 +1,6 @@
 // agent.first — état, affichage et événements de l'app.
 import { appeler } from "./api.js";
-import { cheminCourt, formaterDate, formaterDuree, groupesParDate, limiteOption, metaMessage, titreDepuis } from "./outils.js";
+import { cheminCourt, choixDisponible, formaterDate, formaterDuree, groupesParDate, limiteOption, metaMessage, titreDepuis } from "./outils.js";
 import { libelleEtape, nombreLignes, resumeDiff } from "./outils_cowork.js";
 
 const $ = (id) => document.getElementById(id);
@@ -116,10 +116,9 @@ async function chargerModes() {
 
 function choisirReglages(modele, niveau) {
   const { modeles, niveaux } = etat.modes;
-  const existe = (liste, nom) => liste.some((o) => o.nom === nom);
-  const actif = (liste) => liste.find((o) => o.actif)?.nom ?? liste[0]?.nom ?? null;
-  etat.modele = existe(modeles, modele) ? modele : actif(modeles);
-  etat.niveau = existe(niveaux, niveau) ? niveau : actif(niveaux);
+  // un choix bloqué par la limite du compte est remplacé par un choix disponible
+  etat.modele = choixDisponible(modeles, modele);
+  etat.niveau = choixDisponible(niveaux, niveau);
   dessinerReglages();
 }
 
