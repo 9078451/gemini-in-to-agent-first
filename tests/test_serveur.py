@@ -192,3 +192,23 @@ def test_delai_depasse(pilote, tmp_path):
 
 def test_etat(client):
     assert client.get("/api/etat").json() == {"agent_first": True, "chrome": True, "google": True}
+
+
+def test_page_web_servie_sans_cache(pilote, tmp_path):
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "index.html").write_text("<!doctype html><title>agent.first</title>", encoding="utf-8")
+    (web / "app.js").write_text("console.log(1);", encoding="utf-8")
+    file = FileAttente(lambda: pilote)
+    file.demarrer()
+    app = creer_app(file, Historique(tmp_path / "historique.db"), 2.0, lambda: True, PAR_DEFAUT, dossier_web=web)
+    client = TestClient(app)
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "agent.first" in page.text
+    assert page.headers["cache-control"] == "no-cache"
+    script = client.get("/static/app.js")
+    assert script.status_code == 200
+    assert "javascript" in script.headers["content-type"]
+    assert "cache-control" not in client.get("/api/statistiques").headers
+    file.arreter()

@@ -2,11 +2,13 @@
 import logging
 from concurrent.futures import TimeoutError as DelaiFutur
 from dataclasses import asdict
+from pathlib import Path
 from typing import Callable, Literal
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 from agent_first.file_attente import FileAttente
@@ -49,6 +51,7 @@ def creer_app(
     delai: float,
     chrome_lance: Callable[[], bool],
     modes_par_defaut: Modes,
+    dossier_web: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Agent First")
     cache: dict[str, Modes] = {}
@@ -155,5 +158,19 @@ def creer_app(
         except ConversationInconnue:
             pass
         return erreur(code, message)
+
+    @app.middleware("http")
+    async def sans_cache(requete, suite):
+        reponse = await suite(requete)
+        if not requete.url.path.startswith("/api/"):
+            reponse.headers["Cache-Control"] = "no-cache"
+        return reponse
+
+    if dossier_web is not None:
+        app.mount("/static", StaticFiles(directory=dossier_web), name="static")
+
+        @app.get("/", include_in_schema=False)
+        def page():
+            return FileResponse(dossier_web / "index.html")
 
     return app

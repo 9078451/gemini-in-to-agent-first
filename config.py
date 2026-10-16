@@ -10,6 +10,7 @@ URL_GEMINI = "https://gemini.google.com/app"
 
 HOTE_AGENT = "127.0.0.1"
 PORT_AGENT = 8765
+DOSSIER_WEB = RACINE / "agent_first" / "web"
 
 DELAI_REPONSE = 180.0  # secondes max pour qu'une réponse Gemini se termine
 STABILITE = 2.0  # secondes sans changement du texte = réponse finie
@@ -27,3 +28,6 @@ MODELES_PAR_DEFAUT = [
     ("4 Argon", "Tâches complexes"),
 ]
 NIVEAUX_PAR_DEFAUT = [("Min.", "Rapide et efficace"), ("Moyen", "Équilibré"), ("Max.", "Très poussé")]
+# Présélectionnés dans l'app tant que la liste n'a pas été lue dans Gemini.
+MODELE_ACTIF_PAR_DEFAUT = "4 Argon"
+NIVEAU_ACTIF_PAR_DEFAUT = "Min."
