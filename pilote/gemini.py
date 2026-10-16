@@ -59,13 +59,19 @@ class PiloteGemini:
         self._niveau: str | None = None
 
     def envoyer(
-        self, adresse: str | None, texte: str, modele: str | None = None, niveau: str | None = None
+        self,
+        adresse: str | None,
+        texte: str,
+        modele: str | None = None,
+        niveau: str | None = None,
+        delai: float | None = None,
     ) -> ResultatGemini:
         """Envoie `texte` dans la conversation `adresse` (None = nouvelle conversation),
-        après avoir réglé le modèle et le niveau demandés."""
+        après avoir réglé le modèle et le niveau demandés. `delai` remplace, pour ce
+        message, la limite de temps de réponse par défaut."""
         page = self._chrome.page()
         try:
-            return self._envoyer(page, adresse, texte, modele, niveau)
+            return self._envoyer(page, adresse, texte, modele, niveau, delai or self._delai_reponse)
         except RepereIntrouvable as e:
             raise RepereIntrouvable(e.nom, self._capturer(page)) from e
 
@@ -80,7 +86,7 @@ class PiloteGemini:
         return lus
 
     def _envoyer(
-        self, page: Page, adresse: str | None, texte: str, modele: str | None, niveau: str | None
+        self, page: Page, adresse: str | None, texte: str, modele: str | None, niveau: str | None, delai: float
     ) -> ResultatGemini:
         if adresse is None:
             page.goto(self._url_nouvelle, wait_until="domcontentloaded")
@@ -108,14 +114,17 @@ class PiloteGemini:
         # Un seul délai pour tout le message : Gemini peut réfléchir longtemps
         # avant même d'afficher le début de sa réponse.
         debut = time.monotonic()
-        fin = debut + self._delai_reponse
-        nouvelle = self._attendre_nouvelle_reponse(page, nb_avant, fin)
-        reponse = attendre_fin_reponse(
-            lire_texte=nouvelle.inner_text,
-            generation_en_cours=lambda: self._generation_en_cours(page),
-            delai_max=max(0.0, fin - time.monotonic()),
-            stabilite=self._stabilite,
-        )
+        fin = debut + delai
+        nouvelle = self._attendre_nouvelle_reponse(page, nb_avant, fin, delai)
+        try:
+            reponse = attendre_fin_reponse(
+                lire_texte=nouvelle.inner_text,
+                generation_en_cours=lambda: self._generation_en_cours(page),
+                delai_max=max(0.0, fin - time.monotonic()),
+                stabilite=self._stabilite,
+            )
+        except DelaiDepasse as e:
+            raise DelaiDepasse(delai, e.partiel) from e  # le message cite la limite entière, pas le reste
         return ResultatGemini(
             reponse=reponse.strip(),
             adresse=page.url,
@@ -158,14 +167,14 @@ class PiloteGemini:
                 return
             time.sleep(0.2)
 
-    def _attendre_nouvelle_reponse(self, page: Page, nb_avant: int, fin: float) -> Locator:
+    def _attendre_nouvelle_reponse(self, page: Page, nb_avant: int, fin: float, delai: float) -> Locator:
         while time.monotonic() < fin:
             reponses = premier_present(page, "reponse")
             if reponses is not None and reponses.count() > nb_avant:
                 return reponses.nth(nb_avant)
             time.sleep(0.3)
         if self._generation_en_cours(page):
-            raise DelaiDepasse(self._delai_reponse, "")
+            raise DelaiDepasse(delai, "")
         raise RepereIntrouvable("reponse")
 
     def _generation_en_cours(self, page: Page) -> bool:

@@ -20,8 +20,10 @@ class FauxPilote:
 
     def __init__(self, reponses):
         self._reponses = list(reponses)
+        self.delais = []
 
-    def envoyer(self, adresse, texte, modele=None, niveau=None):
+    def envoyer(self, adresse, texte, modele=None, niveau=None, delai=None):
+        self.delais.append(delai)
         reponse = self._reponses.pop(0) if self._reponses else "TERMINÉ"
         return ResultatGemini(reponse=reponse, adresse="https://gemini.google.com/app/1")
 
@@ -32,14 +34,14 @@ class FauxPilote:
         return PAR_DEFAUT
 
 
-def monter(tmp_path, reponses, choisir=None):
-    pilote = FauxPilote(reponses)
+def monter(tmp_path, reponses, choisir=None, pilote=None, **options):
+    pilote = pilote or FauxPilote(reponses)
     file = FileAttente(lambda: pilote)
     file.demarrer()
     historique = Historique(tmp_path / "historique.db")
     service = ServiceCowork(
         file, historique, lambda dossier: Executeur(dossier, 5, 8000, lancer=lambda *a: (0, "sortie")),
-        max_etapes=40, echecs_max=3, taille_max=8000,
+        max_etapes=40, echecs_max=3, taille_max=8000, **options,
     )
     app = creer_app(file, historique, 2.0, lambda: True, PAR_DEFAUT, cowork=service,
                     choisir_dossier=choisir or (lambda: str(tmp_path)))
@@ -158,4 +160,30 @@ def test_toujours_autoriser_vaut_pour_la_conversation(tmp_path):
     assert "demande" not in [e["type"] for e in seconde]
     assert "autorise" in [e["type"] for e in seconde]  # l'utilisateur voit quand même passer l'action
     assert not (tmp_path / "b.txt").exists()
+    file.arreter()
+
+
+def test_accord_sans_reponse_arrete_la_tache(tmp_path):
+    # Sans limite, une demande restée sans réponse bloquerait toute la file de Gemini (Chat compris).
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    reponses = ['```json\n{"action":"supprimer","chemin":"a.txt"}\n```', "TERMINÉ : fait"]
+    client, file, historique, service = monter(tmp_path, reponses, delai_accord=0.2)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "supprime a.txt"})
+    evs = evenements(service, conv.id)
+    types = [e["type"] for e in evs]
+    assert "refus" in types and types[-1] == "arret"
+    assert "accord" in evs[-1]["raison"]
+    assert (tmp_path / "a.txt").exists()
+    file.arreter()
+
+
+def test_cowork_laisse_a_gemini_sa_propre_limite_par_message(tmp_path):
+    # 4 Argon peut réfléchir plusieurs minutes avant d'écrire : la limite du Chat (180 s) est trop courte.
+    pilote = FauxPilote(["TERMINÉ : rien à faire"])
+    client, file, historique, service = monter(tmp_path, [], pilote=pilote, delai_reponse=600.0)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "rien"})
+    evenements(service, conv.id)
+    assert pilote.delais == [600.0]
     file.arreter()

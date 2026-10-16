@@ -36,7 +36,12 @@ class Modes:
 
 class Pilote(Protocol):
     def envoyer(
-        self, adresse: str | None, texte: str, modele: str | None = None, niveau: str | None = None
+        self,
+        adresse: str | None,
+        texte: str,
+        modele: str | None = None,
+        niveau: str | None = None,
+        delai: float | None = None,
     ) -> ResultatGemini: ...
 
     def est_connecte(self) -> bool: ...

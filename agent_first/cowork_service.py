@@ -32,6 +32,7 @@ class _Session:
         self.reponse_accord = False
         self.action_en_attente = ""
         self.arret = threading.Event()
+        self.raison_arret = ""
         self.etape = 0
 
 
@@ -44,6 +45,8 @@ class ServiceCowork:
         max_etapes: int,
         echecs_max: int,
         taille_max: int,
+        delai_accord: float = 600.0,
+        delai_reponse: float | None = None,
     ) -> None:
         self._file = file
         self._historique = historique
@@ -51,6 +54,12 @@ class ServiceCowork:
         self._max_etapes = max_etapes
         self._echecs_max = echecs_max
         self._taille_max = taille_max
+        # La tâche tourne dans la file de Gemini : un accord jamais donné (fenêtre fermée…)
+        # la bloquerait, Chat compris. Passé ce délai, la tâche s'arrête.
+        self._delai_accord = delai_accord
+        # Limite par message à Gemini (None = celle du pilote) : 4 Argon peut réfléchir
+        # plusieurs minutes avant d'écrire, plus longtemps que la limite du Chat.
+        self._delai_reponse = delai_reponse
         self._sessions: dict[str, _Session] = {}
         # Types d'action autorisés « toujours » : valent pour toute la conversation.
         self._toujours: dict[str, set[str]] = {}
@@ -70,7 +79,7 @@ class ServiceCowork:
             def envoyer(msg: str) -> str:
                 if session.arret.is_set():
                     raise _Arret()
-                resultat = pilote.envoyer(etat["adresse"], msg, modele, niveau)
+                resultat = pilote.envoyer(etat["adresse"], msg, modele, niveau, delai=self._delai_reponse)
                 etat["adresse"] = resultat.adresse
                 if etat["adresse"]:
                     self._historique.enregistrer_adresse(conversation_id, etat["adresse"])
@@ -89,7 +98,8 @@ class ServiceCowork:
                     taille_max=self._taille_max,
                 )
             except _Arret:
-                self._emettre(conversation_id, session, {"type": "arret"})
+                arret = {"type": "arret", "raison": session.raison_arret} if session.raison_arret else {"type": "arret"}
+                self._emettre(conversation_id, session, arret)
             except Exception as e:
                 journal.exception("Erreur dans la tâche Cowork")
                 self._emettre(conversation_id, session, {"type": "erreur", "corps": str(e)})
@@ -132,7 +142,9 @@ class ServiceCowork:
             return True
         session.action_en_attente = action.nom
         session.accord.clear()
-        session.accord.wait()
+        if not session.accord.wait(self._delai_accord):
+            session.raison_arret = f"pas de réponse à la demande d'accord en {self._delai_accord / 60:.0f} min"
+            session.arret.set()
         if session.arret.is_set():
             return False
         return session.reponse_accord

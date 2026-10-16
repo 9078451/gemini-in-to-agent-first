@@ -13,6 +13,7 @@ PORT_AGENT = 8765
 DOSSIER_WEB = RACINE / "agent_first" / "web"
 
 DELAI_REPONSE = 180.0  # secondes max pour qu'une réponse Gemini se termine
+DELAI_REPONSE_COWORK = 600.0  # s, par message en Cowork : 4 Argon peut réfléchir plusieurs minutes avant d'écrire
 STABILITE = 2.0  # secondes sans changement du texte = réponse finie
 DELAI_AGENT = 290.0  # attente max d'Agent First (file d'attente + Gemini)
 
@@ -21,6 +22,7 @@ DELAI_COMMANDE = 120.0  # secondes max pour une commande PowerShell
 MAX_ETAPES_COWORK = 40  # garde-fou : nombre d'actions par tâche
 TAILLE_MAX_SORTIE = 8000  # caractères gardés d'une sortie de commande
 ECHECS_FORMAT_MAX = 3  # arrêt après N réponses de Gemini au format cassé
+DELAI_ACCORD = 600.0  # s : sans réponse à une demande d'accord, la tâche Cowork s'arrête
 
 DOSSIER_DONNEES = RACINE / "donnees"
 DOSSIER_JOURNAUX = RACINE / "journaux"

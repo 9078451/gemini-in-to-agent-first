@@ -54,6 +54,7 @@ def main() -> None:
     cowork = ServiceCowork(
         file, historique, fabrique_executeur,
         config.MAX_ETAPES_COWORK, config.ECHECS_FORMAT_MAX, config.TAILLE_MAX_SORTIE,
+        delai_accord=config.DELAI_ACCORD, delai_reponse=config.DELAI_REPONSE_COWORK,
     )
     app = creer_app(
         file, historique, config.DELAI_AGENT, chrome.est_lance, par_defaut,

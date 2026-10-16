@@ -5,6 +5,7 @@ ne peuvent pas sortir du dossier de travail : un chemin qui s'en échappe est
 refusé ici, dans le code. Seule « commande » peut atteindre l'extérieur, et
 c'est l'analyse de sûreté qui la couvre.
 """
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,11 +25,17 @@ class Resultat:
     diff: str | None = None
 
 
+# Sans cela, PowerShell 5.1 écrit sa sortie dans la page de code de la console (cp850) :
+# lue en UTF-8, « Répertoire » devenait « R�pertoire ».
+_SORTIE_UTF8 = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; $OutputEncoding = [Text.Encoding]::UTF8; "
+
+
 def lancer_powershell(texte: str, dossier: Path, delai: float) -> tuple[int, str]:
     """Lance une commande PowerShell dans `dossier` ; renvoie (code, sortie)."""
     acheve = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", texte],
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _SORTIE_UTF8 + texte],
         cwd=dossier,
+        env={**os.environ, "PYTHONUTF8": "1"},  # un script Python lancé écrit lui aussi en UTF-8
         capture_output=True,
         text=True,
         encoding="utf-8",

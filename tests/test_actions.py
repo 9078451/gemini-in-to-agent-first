@@ -2,7 +2,7 @@ import subprocess
 
 import pytest
 
-from cowork.actions import Executeur
+from cowork.actions import Executeur, lancer_powershell
 from cowork.format import Action
 
 
@@ -84,3 +84,17 @@ def test_chercher_ne_sort_pas_du_dossier(ex, tmp_path):
         assert r.ok is False and "hors du dossier" in r.corps
     finally:
         secret.unlink()
+
+
+def test_powershell_rend_les_accents(tmp_path):
+    # PowerShell 5.1 écrit dans la page de code de la console (cp850) si on ne lui dit rien.
+    code, sortie = lancer_powershell("Write-Output 'Répertoire : é à ç'", tmp_path, 60)
+    assert code == 0
+    assert "Répertoire : é à ç" in sortie
+
+
+def test_python_lance_par_powershell_rend_les_accents(tmp_path):
+    (tmp_path / "a.py").write_text("print('été')", encoding="utf-8")
+    code, sortie = lancer_powershell("python a.py", tmp_path, 60)
+    assert code == 0
+    assert "été" in sortie
