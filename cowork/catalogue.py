@@ -15,6 +15,18 @@ class Action:
 
 
 @dataclass(frozen=True)
+class Resultat:
+    """Ce qu'une action a donné. `effet` = ("cree" | "modifie" | "supprime", chemin)
+    pour le bilan ; `code` = code de sortie d'une commande."""
+
+    ok: bool
+    corps: str
+    diff: str | None = None
+    effet: tuple[str, str] | None = None
+    code: int | None = None
+
+
+@dataclass(frozen=True)
 class Definition:
     nom: str
     requis: tuple[str, ...]

@@ -47,10 +47,10 @@ MOTIFS_DANGEREUX: list[tuple[str, str]] = [
 
 
 def classer(action: Action) -> Verdict:
-    if action.nom == "supprimer":
+    if action.nom == "delete":
         return Verdict(True, "suppression définitive")
-    if action.nom == "commande":
-        return analyser_commande(action.champs.get("texte", ""))
+    if action.nom in ("run", "start"):
+        return analyser_commande(action.champs.get("command", ""))
     return Verdict(False)
 
 

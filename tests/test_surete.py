@@ -3,15 +3,15 @@ from cowork.surete import classer
 
 
 def cmd(texte: str) -> Action:
-    return Action("commande", {"texte": texte})
+    return Action("run", {"command": texte})
 
 
 def test_supprimer_dangereux():
-    assert classer(Action("supprimer", {"chemin": "x"})).dangereuse is True
+    assert classer(Action("delete", {"path": "x"})).dangereuse is True
 
 
 def test_creer_modifier_lire_surs():
-    for nom in ("creer", "modifier", "lire", "lister", "chercher"):
+    for nom in ("create", "edit", "read", "list", "search", "visit", "plan", "logs", "stop"):
         assert classer(Action(nom, {})).dangereuse is False
 
 
@@ -63,3 +63,8 @@ def test_redirection_des_erreurs_sure():
 def test_git_destructif_dangereux():
     for t in ("git clean -fdx", "git reset --hard", "git checkout -- .", "pip uninstall requests -y"):
         assert classer(cmd(t)).dangereuse is True, t
+
+
+def test_start_analyse_comme_run():
+    assert classer(Action("start", {"command": "Remove-Item -Recurse x"})).dangereuse is True
+    assert classer(Action("start", {"command": "python server.py"})).dangereuse is False
