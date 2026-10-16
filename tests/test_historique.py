@@ -161,3 +161,37 @@ def test_ajouter_etape_round_trip(historique):
     m = historique.messages(c.id)[0]
     assert m.role == "cowork"
     assert json.loads(m.details)["action"] == "creer"
+
+
+def test_source_par_defaut_app(historique):
+    assert historique.creer().source == "app"
+
+
+def test_source_api(historique):
+    c = historique.creer(source="api")
+    assert historique.conversation(c.id).source == "api"
+
+
+def test_migration_ajoute_source(tmp_path, horloge):
+    import sqlite3
+
+    fichier = tmp_path / "ancienne.db"
+    base = sqlite3.connect(fichier)
+    base.executescript(
+        """CREATE TABLE conversations (id TEXT PRIMARY KEY, titre TEXT NOT NULL DEFAULT '', adresse TEXT,
+           modele TEXT, niveau TEXT, cree_le TEXT NOT NULL, modifie_le TEXT NOT NULL);
+           INSERT INTO conversations (id, cree_le, modifie_le) VALUES ('x', '2026-10-01', '2026-10-01');"""
+    )
+    base.commit()
+    base.close()
+    assert Historique(fichier, horloge).conversation("x").source == "app"
+
+
+def test_derniere_etape(historique):
+    c = historique.creer(mode="cowork", dossier="C:/x")
+    assert historique.derniere_etape(c.id, {"termine"}) is None
+    historique.ajouter_etape(c.id, {"type": "termine", "resume": "un"})
+    historique.ajouter_etape(c.id, {"type": "action", "action": "list"})
+    historique.ajouter_etape(c.id, {"type": "question", "question": "?"})
+    assert historique.derniere_etape(c.id, {"termine"})["resume"] == "un"
+    assert historique.derniere_etape(c.id, {"termine", "question"})["type"] == "question"

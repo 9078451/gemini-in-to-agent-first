@@ -6,13 +6,17 @@ import threading
 import uvicorn
 
 import config
+from agent_first.cache_modes import CacheModes
 from agent_first.cowork_service import ServiceCowork
+from agent_first.diffuseur import Diffuseur
 from agent_first.dossier import choisir_dossier
 from agent_first.fenetre import ouvrir_quand_pret, repond
 from agent_first.file_attente import FileAttente
 from agent_first.historique import Historique
 from agent_first.serveur import creer_app
 from cowork.actions import Executeur
+from cowork.boucle import Reglages
+from cowork.processus import GestionnaireProcessus
 from pilote.chrome import ChromeDedie
 from pilote.gemini import PiloteGemini
 from pilote.modeles import Modes, Option
@@ -48,17 +52,37 @@ def main() -> None:
         [Option(n, d, n == config.MODELE_ACTIF_PAR_DEFAUT) for n, d in config.MODELES_PAR_DEFAUT],
         [Option(n, d, n == config.NIVEAU_ACTIF_PAR_DEFAUT) for n, d in config.NIVEAUX_PAR_DEFAUT],
     )
-    def fabrique_executeur(dossier):
-        return Executeur(dossier, config.DELAI_COMMANDE, config.TAILLE_MAX_SORTIE)
+    # Gemini ne doit pas pouvoir joindre Agent First (il validerait ses propres accords) ni le Chrome dédié.
+    ports_interdits = frozenset({config.PORT_AGENT, config.PORT_API, config.PORT_CHROME})
 
+    def fabrique_executeur(dossier, processus):
+        return Executeur(
+            dossier, config.DELAI_COMMANDE, config.TAILLE_MAX_SORTIE, processus=processus,
+            ports_interdits=ports_interdits, delai_visite=config.DELAI_VISITE,
+        )
+
+    def fabrique_processus(dossier, au_changement):
+        return GestionnaireProcessus(
+            dossier, config.MAX_PROCESSUS, config.ATTENTE_DEMARRAGE, config.TAILLE_MAX_SORTIE,
+            au_changement=au_changement,
+        )
+
+    reglages = Reglages(
+        max_tours=config.MAX_TOURS_COWORK, max_actions=config.MAX_ACTIONS_PAR_MESSAGE,
+        echecs_max=config.ECHECS_FORMAT_MAX, taille_max=config.TAILLE_MAX_SORTIE,
+        taille_max_message=config.TAILLE_MAX_MESSAGE, relances_fin_max=config.RELANCES_FIN_MAX,
+    )
+    diffuseur = Diffuseur()
+    cache_modes = CacheModes(file, chrome.est_lance, par_defaut)
     cowork = ServiceCowork(
-        file, historique, fabrique_executeur,
-        config.MAX_ETAPES_COWORK, config.ECHECS_FORMAT_MAX, config.TAILLE_MAX_SORTIE,
+        file, historique, fabrique_executeur, reglages, fabrique_processus,
         delai_accord=config.DELAI_ACCORD, delai_reponse=config.DELAI_REPONSE_COWORK,
+        diffuseur=diffuseur, max_entrees=config.MAX_ENTREES_ARBORESCENCE,
     )
     app = creer_app(
         file, historique, config.DELAI_AGENT, chrome.est_lance, par_defaut,
         config.DOSSIER_WEB, cowork=cowork, choisir_dossier=choisir_dossier,
+        diffuseur=diffuseur, cache_modes=cache_modes,
     )
     if args.ouvrir:
         url = f"http://{config.HOTE_AGENT}:{config.PORT_AGENT}/"
@@ -68,6 +92,7 @@ def main() -> None:
     try:
         uvicorn.run(app, host=config.HOTE_AGENT, port=config.PORT_AGENT)
     finally:
+        cowork.arreter_tout()  # les serveurs lancés par Cowork s'arrêtent avec Agent First
         file.arreter()
 
 

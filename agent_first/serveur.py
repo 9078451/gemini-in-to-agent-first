@@ -11,6 +11,9 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
+from agent_first.cache_modes import CacheModes
+from agent_first.cowork_service import TacheEnCours
+from agent_first.diffuseur import Diffuseur
 from agent_first.file_attente import FileAttente
 from agent_first.historique import ConversationInconnue, Historique
 from agent_first.nettoyage import nettoyer_html
@@ -21,6 +24,7 @@ journal = logging.getLogger(__name__)
 
 Periode = Literal["7j", "30j", "tout"]
 INCONNUE = "Conversation inconnue : démarre une nouvelle conversation."
+EN_COURS = "Une tâche tourne déjà dans cette conversation : attends sa fin ou arrête-la."
 
 
 class NouvelleConversation(BaseModel):
@@ -73,9 +77,11 @@ def creer_app(
     dossier_web: Path | None = None,
     cowork=None,
     choisir_dossier: Callable[[], str | None] | None = None,
+    diffuseur: Diffuseur | None = None,
+    cache_modes: CacheModes | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Agent First")
-    cache: dict[str, Modes] = {}
+    modes = cache_modes or CacheModes(file, chrome_lance, modes_par_defaut)
 
     @app.exception_handler(RequestValidationError)
     def demande_invalide(_requete, _exc):
@@ -94,15 +100,7 @@ def creer_app(
 
     @app.get("/api/modeles")
     def modeles():
-        modes = cache.get("modes")
-        if modes is None and chrome_lance():
-            try:
-                lus = file.soumettre(lambda pilote: pilote.lister_modes()).result(timeout=30)
-                if lus.modeles:
-                    cache["modes"] = modes = lus
-            except Exception:
-                journal.warning("Modèles illisibles dans Gemini : liste par défaut", exc_info=True)
-        return asdict(modes or modes_par_defaut)
+        return asdict(modes.lire())
 
     @app.get("/api/conversations")
     def conversations(recherche: str = "", periode: Periode = "tout"):
@@ -123,13 +121,33 @@ def creer_app(
             return erreur(404, INCONNUE)
         if conv.mode != "cowork" or not conv.dossier:
             return erreur(422, "Cette conversation n'est pas une tâche Cowork avec un dossier.")
+        if cowork.en_cours(identifiant):
+            return erreur(409, EN_COURS)
         historique.ajouter_message(identifiant, "toi", demande.texte)
-        cowork.demarrer(identifiant, conv.dossier, conv.adresse, demande.texte, conv.modele, conv.niveau)
+        try:
+            cowork.demarrer(identifiant, conv.dossier, conv.adresse, demande.texte, conv.modele, conv.niveau)
+        except TacheEnCours:
+            return erreur(409, EN_COURS)
         return {"ok": True}
 
     @app.get("/api/cowork/{identifiant}/flux")
-    def cowork_flux(identifiant: str):
-        return StreamingResponse(cowork.flux(identifiant), media_type="text/event-stream")
+    def cowork_flux(identifiant: str, depuis: int = 0):
+        return StreamingResponse(cowork.flux(identifiant, depuis), media_type="text/event-stream")
+
+    @app.get("/api/cowork/{identifiant}/processus")
+    def cowork_processus(identifiant: str):
+        return {"processus": cowork.processus(identifiant)}
+
+    @app.post("/api/cowork/{identifiant}/processus/{numero}/arreter")
+    def cowork_arreter_processus(identifiant: str, numero: str):
+        resultat = cowork.arreter_processus(identifiant, numero)
+        return {"ok": resultat.ok, "corps": resultat.corps, "processus": cowork.processus(identifiant)}
+
+    @app.get("/api/evenements")
+    def evenements():
+        if diffuseur is None:
+            return erreur(404, "Pas de flux d'évènements.")
+        return StreamingResponse(diffuseur.flux(), media_type="text/event-stream")
 
     @app.post("/api/cowork/{identifiant}/decision")
     def cowork_decision(identifiant: str, decision: Decision):
@@ -149,10 +167,13 @@ def creer_app(
     def conversation(identifiant: str):
         try:
             lue = historique.conversation(identifiant)
-            messages = historique.messages(identifiant)
+            if cowork is None:
+                messages, tache = historique.messages(identifiant), {"en_cours": False, "depuis": 0}
+            else:  # pris ensemble : les étapes lues + le n° d'où reprendre le flux en direct
+                messages, tache = cowork.instantane(identifiant, lambda: historique.messages(identifiant))
         except ConversationInconnue:
             return erreur(404, INCONNUE)
-        return {"conversation": asdict(lue), "messages": [asdict(m) for m in messages]}
+        return {"conversation": asdict(lue), "messages": [asdict(m) for m in messages], "tache": tache}
 
     @app.delete("/api/conversations/{identifiant}")
     def supprimer(identifiant: str):
@@ -175,7 +196,7 @@ def creer_app(
         except DelaiFutur:
             return echec(identifiant, 504, f"Pas de réponse de Gemini après {delai:.0f} s.")
         except (ModeleIntrouvable, NiveauIntrouvable, ChoixBloque) as e:
-            cache.pop("modes", None)  # la liste a changé : relue à la prochaine demande
+            modes.oublier()  # la liste a changé : relue à la prochaine demande
             return echec(identifiant, 502, str(e))
         except ErreurPilote as e:
             return echec(identifiant, 502, str(e))

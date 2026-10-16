@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     niveau TEXT,
     mode TEXT NOT NULL DEFAULT 'chat',
     dossier TEXT,
+    source TEXT NOT NULL DEFAULT 'app',
     cree_le TEXT NOT NULL,
     modifie_le TEXT NOT NULL
 );
@@ -44,10 +45,10 @@ CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id);
 """
 # Colonnes ajoutées après la v2 : migrées à l'ouverture des bases existantes.
 COLONNES_AJOUTEES = {
-    "conversations": [("mode", "TEXT NOT NULL DEFAULT 'chat'"), ("dossier", "TEXT")],
+    "conversations": [("mode", "TEXT NOT NULL DEFAULT 'chat'"), ("dossier", "TEXT"), ("source", "TEXT NOT NULL DEFAULT 'app'")],
     "messages": [("details", "TEXT")],
 }
-COLONNES_CONVERSATION = """c.id, c.titre, c.adresse, c.modele, c.niveau, c.mode, c.dossier,
+COLONNES_CONVERSATION = """c.id, c.titre, c.adresse, c.modele, c.niveau, c.mode, c.dossier, c.source,
     c.cree_le, c.modifie_le,
     (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id) AS nb_messages"""
 COLONNES_MESSAGE = "id, conversation_id, role, texte, html, modele, niveau, duree, details, cree_le"
@@ -69,6 +70,7 @@ class Conversation:
     dossier: str | None
     cree_le: str
     modifie_le: str
+    source: str = "app"  # « app » ou « api » (créée par un autre programme via l'API réseau)
     nb_messages: int = 0
 
 
@@ -106,13 +108,14 @@ class Historique:
         niveau: str | None = None,
         mode: str = "chat",
         dossier: str | None = None,
+        source: str = "app",
     ) -> Conversation:
         with self._verrou:
             identifiant, date = uuid.uuid4().hex, self._date()
             self._base.execute(
-                """INSERT INTO conversations (id, modele, niveau, mode, dossier, cree_le, modifie_le)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (identifiant, modele, niveau, mode, dossier, date, date),
+                """INSERT INTO conversations (id, modele, niveau, mode, dossier, source, cree_le, modifie_le)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (identifiant, modele, niveau, mode, dossier, source, date, date),
             )
             self._base.commit()
             return self._conversation(identifiant)
@@ -198,6 +201,17 @@ class Historique:
             evenement.get("type", ""),
             details=json.dumps(evenement, ensure_ascii=False),
         )
+
+    def derniere_etape(self, identifiant: str, types: set[str]) -> dict | None:
+        """La dernière étape Cowork de la conversation dont le type est dans `types`."""
+        marques = ",".join("?" * len(types))
+        with self._verrou:
+            ligne = self._base.execute(
+                f"""SELECT details FROM messages WHERE conversation_id = ? AND role = 'cowork'
+                    AND texte IN ({marques}) ORDER BY id DESC LIMIT 1""",
+                (identifiant, *sorted(types)),
+            ).fetchone()
+        return json.loads(ligne["details"]) if ligne and ligne["details"] else None
 
     # ---- statistiques ---------------------------------------------------
 
