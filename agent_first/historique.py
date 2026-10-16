@@ -1,4 +1,5 @@
 """Historique de l'app : conversations et messages, dans une base SQLite sur le PC."""
+import json
 import logging
 import os
 import sqlite3
@@ -22,6 +23,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     adresse TEXT,
     modele TEXT,
     niveau TEXT,
+    mode TEXT NOT NULL DEFAULT 'chat',
+    dossier TEXT,
     cree_le TEXT NOT NULL,
     modifie_le TEXT NOT NULL
 );
@@ -34,13 +37,20 @@ CREATE TABLE IF NOT EXISTS messages (
     modele TEXT,
     niveau TEXT,
     duree REAL,
+    details TEXT,
     cree_le TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id);
 """
-COLONNES_CONVERSATION = """c.id, c.titre, c.adresse, c.modele, c.niveau, c.cree_le, c.modifie_le,
+# Colonnes ajoutées après la v2 : migrées à l'ouverture des bases existantes.
+COLONNES_AJOUTEES = {
+    "conversations": [("mode", "TEXT NOT NULL DEFAULT 'chat'"), ("dossier", "TEXT")],
+    "messages": [("details", "TEXT")],
+}
+COLONNES_CONVERSATION = """c.id, c.titre, c.adresse, c.modele, c.niveau, c.mode, c.dossier,
+    c.cree_le, c.modifie_le,
     (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id) AS nb_messages"""
-COLONNES_MESSAGE = "id, conversation_id, role, texte, html, modele, niveau, duree, cree_le"
+COLONNES_MESSAGE = "id, conversation_id, role, texte, html, modele, niveau, duree, details, cree_le"
 NON_VIDE = "EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)"
 
 
@@ -55,6 +65,8 @@ class Conversation:
     adresse: str | None
     modele: str | None
     niveau: str | None
+    mode: str
+    dossier: str | None
     cree_le: str
     modifie_le: str
     nb_messages: int = 0
@@ -70,6 +82,7 @@ class Message:
     modele: str | None
     niveau: str | None
     duree: float | None
+    details: str | None
     cree_le: str
 
 
@@ -87,12 +100,19 @@ class Historique:
 
     # ---- conversations --------------------------------------------------
 
-    def creer(self, modele: str | None = None, niveau: str | None = None) -> Conversation:
+    def creer(
+        self,
+        modele: str | None = None,
+        niveau: str | None = None,
+        mode: str = "chat",
+        dossier: str | None = None,
+    ) -> Conversation:
         with self._verrou:
             identifiant, date = uuid.uuid4().hex, self._date()
             self._base.execute(
-                "INSERT INTO conversations (id, modele, niveau, cree_le, modifie_le) VALUES (?, ?, ?, ?, ?)",
-                (identifiant, modele, niveau, date, date),
+                """INSERT INTO conversations (id, modele, niveau, mode, dossier, cree_le, modifie_le)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (identifiant, modele, niveau, mode, dossier, date, date),
             )
             self._base.commit()
             return self._conversation(identifiant)
@@ -147,14 +167,16 @@ class Historique:
         modele: str | None = None,
         niveau: str | None = None,
         duree: float | None = None,
+        details: str | None = None,
     ) -> Message:
         with self._verrou:
             conversation = self._conversation(identifiant)
             date = self._date()
             curseur = self._base.execute(
-                """INSERT INTO messages (conversation_id, role, texte, html, modele, niveau, duree, cree_le)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (identifiant, role, texte, html, modele, niveau, duree, date),
+                """INSERT INTO messages
+                   (conversation_id, role, texte, html, modele, niveau, duree, details, cree_le)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (identifiant, role, texte, html, modele, niveau, duree, details, date),
             )
             titre = conversation.titre or (titre_depuis(texte) if role == "toi" else "")
             self._base.execute(
@@ -167,6 +189,15 @@ class Historique:
                 f"SELECT {COLONNES_MESSAGE} FROM messages WHERE id = ?", (curseur.lastrowid,)
             ).fetchone()
         return Message(**dict(ligne))
+
+    def ajouter_etape(self, identifiant: str, evenement: dict) -> Message:
+        """Enregistre une étape Cowork : rôle « cowork », texte = type, détails en JSON."""
+        return self.ajouter_message(
+            identifiant,
+            "cowork",
+            evenement.get("type", ""),
+            details=json.dumps(evenement, ensure_ascii=False),
+        )
 
     # ---- statistiques ---------------------------------------------------
 
@@ -228,7 +259,17 @@ class Historique:
             base.row_factory = sqlite3.Row
             base.execute("PRAGMA foreign_keys = ON")
             base.executescript(SCHEMA)
+            self._migrer(base)
         except sqlite3.DatabaseError:
             base.close()
             raise
         return base
+
+    def _migrer(self, base: sqlite3.Connection) -> None:
+        """Ajoute les colonnes manquantes aux bases créées avant le mode Cowork."""
+        for table, colonnes in COLONNES_AJOUTEES.items():
+            presentes = {r["name"] for r in base.execute(f"PRAGMA table_info({table})")}
+            for nom, definition in colonnes:
+                if nom not in presentes:
+                    base.execute(f"ALTER TABLE {table} ADD COLUMN {nom} {definition}")
+        base.commit()

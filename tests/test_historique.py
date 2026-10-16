@@ -143,3 +143,21 @@ def test_base_corrompue_mise_de_cote(tmp_path, horloge):
     h.ajouter_message(c.id, "toi", "Bonjour")
     assert len(h.lister()) == 1
     assert (tmp_path / "historique.corrompu.db").exists()
+
+
+def test_conversation_cowork(historique):
+    c = historique.creer(mode="cowork", dossier="C:/projets/site")
+    assert (c.mode, c.dossier) == ("cowork", "C:/projets/site")
+
+
+def test_mode_chat_par_defaut(historique):
+    assert historique.creer().mode == "chat"
+
+
+def test_ajouter_etape_round_trip(historique):
+    import json
+    c = historique.creer(mode="cowork", dossier="C:/x")
+    historique.ajouter_etape(c.id, {"type": "action", "action": "creer", "champs": {"chemin": "a"}})
+    m = historique.messages(c.id)[0]
+    assert m.role == "cowork"
+    assert json.loads(m.details)["action"] == "creer"
