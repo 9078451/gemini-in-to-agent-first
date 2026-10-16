@@ -14,7 +14,7 @@ from cowork.catalogue import CLES, Action, liste_compacte, normaliser, resume_ac
 __all__ = ["Action", "LigneResultat", "PIED", "lire_actions", "formater_resultats", "rappel_pour", "est_erreur_gemini"]
 
 _BLOC = re.compile(r"```json\s*(.*?)\s*```", re.S)
-_DEBUT_JSON = re.compile(r"[\[{]")
+_TERMINE = re.compile(r"^[ \t]*TERMINÉ\b\s*:?\s*(.*)", re.M | re.S)
 COUPE = "\n…(cut)"
 PIED = (
     'Reply with JSON actions only. Finish with {"action": "done", "summary": "…"} '
@@ -31,48 +31,64 @@ class LigneResultat:
 
 
 def lire_actions(message: str) -> list[Action]:
-    """Toutes les actions du message, dans l'ordre. [] si aucune."""
-    actions = [a for bloc in _BLOC.finditer(message) for a in _depuis_texte_json(bloc.group(1))]
-    if actions:
-        return actions
-    actions = _balayer(message)
-    if actions:
-        return actions
-    reparee = _reparer(message)
-    if reparee:
-        return [reparee]
-    if "TERMINÉ" in message:  # ancien format de fin, sans JSON
-        return [Action("done", {"summary": message.split("TERMINÉ", 1)[1].lstrip(" :\n").strip()})]
-    return []
-
-
-def _depuis_texte_json(texte: str) -> list[Action]:
+    """Toutes les actions du message, dans l'ordre. [] si aucune, ou si un objet qui
+    annonce une action reste illisible : un lot amputé (le plan et la fin sans la
+    création qui les précédait) ne doit jamais s'exécuter."""
     try:
-        return _depuis_objet(json.loads(texte))
-    except ValueError:
+        actions = [a for bloc in _BLOC.findall(message) for a in _lire_morceau(bloc)]
+        if not actions:
+            actions = _lire_morceau(message)
+    except _Illisible:
         return []
+    if actions or '"action"' in message:
+        return actions
+    fin = _TERMINE.search(message)  # ancien format de fin, sans JSON, en début de ligne
+    return [Action("done", {"summary": fin.group(1).strip()})] if fin else []
+
+
+class _Illisible(Exception):
+    """Un objet annonce une action mais ne se lit pas, même réparé."""
+
+
+def _lire_morceau(texte: str) -> list[Action]:
+    """Lit chaque objet qui contient « "action" », depuis son accolade ; la lecture reprend
+    après sa fin, pour ne jamais relire les accolades d'un contenu de fichier. Un objet
+    abîmé est réparé à part, borné par l'objet action suivant ; sinon : _Illisible."""
+    decodeur = json.JSONDecoder()
+    actions, position = [], 0
+    while (ancre := texte.find('"action"', position)) >= 0:
+        debut = texte.rfind("{", position, ancre)
+        if debut < 0:  # « "action" » dans la prose, sans objet autour
+            position = ancre + len('"action"')
+            continue
+        try:
+            objet, fin = decodeur.raw_decode(texte, debut)
+        except ValueError:
+            suivant = _debut_suivant(texte, ancre + len('"action"'))
+            reparee = _reparer(texte[debut:suivant])
+            if reparee is None:
+                raise _Illisible from None
+            actions.append(reparee)
+            position = suivant
+            continue
+        actions += _depuis_objet(objet)
+        position = max(fin, ancre + len('"action"'))
+    return actions
+
+
+def _debut_suivant(texte: str, depuis: int) -> int:
+    """L'accolade du prochain objet action, ou la fin du texte : la borne d'un objet abîmé."""
+    ancre = texte.find('"action"', depuis)
+    if ancre < 0:
+        return len(texte)
+    debut = texte.rfind("{", depuis, ancre)
+    return debut if debut >= 0 else len(texte)
 
 
 def _depuis_objet(objet) -> list[Action]:
     elements = objet if isinstance(objet, list) else [objet]
     actions = (normaliser(e) for e in elements if isinstance(e, dict))
     return [a for a in actions if a is not None]
-
-
-def _balayer(message: str) -> list[Action]:
-    """Chaque objet ou liste JSON du texte ; on reprend la lecture après sa fin,
-    pour ne jamais relire les accolades d'un contenu de fichier."""
-    decodeur = json.JSONDecoder()
-    actions, position = [], 0
-    while (debut := _DEBUT_JSON.search(message, position)) is not None:
-        try:
-            objet, fin = decodeur.raw_decode(message, debut.start())
-        except ValueError:
-            position = debut.start() + 1
-            continue
-        actions += _depuis_objet(objet)
-        position = fin
-    return actions
 
 
 _CLE = re.compile(r'(?:^|[{,])\s*"(%s)"\s*:\s*"' % "|".join(CLES))

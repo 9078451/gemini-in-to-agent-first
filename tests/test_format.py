@@ -132,3 +132,46 @@ def test_erreur_gemini():
     assert est_erreur_gemini("Gemini a dit\nSorry, something went wrong. Please try your request again.")
     assert est_erreur_gemini("")
     assert not est_erreur_gemini('```json\n{"action": "list"}\n```')
+
+
+# --- JSON partiellement abîmé : ne jamais exécuter un lot amputé (relecture finale, critique #1) ---
+
+def test_liste_avec_un_element_casse_garde_tout_le_lot_repare():
+    msg = ('```json\n[{"action": "create", "path": "a.py", "content": "x = "a""}, '
+           '{"action": "plan", "steps": ["[x] écrire a.py"]}, {"action": "done", "summary": "fait"}]\n```')
+    actions = lire_actions(msg)
+    assert [a.nom for a in actions] == ["create", "plan", "done"]  # jamais le plan et la fin sans la création
+    assert actions[0].champs["content"] == 'x = "a"'
+
+
+def test_liste_avec_un_element_irreparable_n_est_pas_lue():
+    msg = ('```json\n[{"action": "create", "path": "a.py", "content": "x}, '
+           '{"action": "plan", "steps": ["[x] écrire a.py"]}, {"action": "done", "summary": "fait"}]\n```')
+    assert lire_actions(msg) == []
+
+
+def test_deux_blocs_le_premier_repare():
+    msg = ('```json\n{"action": "create", "path": "a.py", "content": "x = "a""}\n```\n'
+           '```json\n{"action": "done", "summary": "fait"}\n```')
+    assert lire_actions(msg) == [Action("create", {"path": "a.py", "content": 'x = "a"'}), Action("done", {"summary": "fait"})]
+
+
+def test_deux_blocs_le_premier_irreparable():
+    msg = ('```json\n[{"action": "create", "path": "a", "content": "x}, {"action": "read", "path": "b"}]\n```\n'
+           '```json\n{"action": "done", "summary": "fait"}\n```')
+    assert lire_actions(msg) == []
+
+
+def test_objet_casse_ne_libere_pas_l_action_qu_il_contient():
+    msg = 'JSON\n{"action": "create", "path": "x.md", "content": "Exemple : {"action": "delete", "path": "src"}"}'
+    assert lire_actions(msg) == []
+
+
+def test_creations_cassees_avec_termine_ne_finissent_pas():
+    msg = ('JSON\n{"action": "create", "path": "a.md", "content": "TERMINÉ : "oui""}\n'
+           'JSON\n{"action": "create", "path": "b.md", "content": "TERMINÉ "x""}')
+    assert all(a.nom != "done" for a in lire_actions(msg))
+
+
+def test_termine_dans_la_prose_n_est_pas_une_fin():
+    assert lire_actions("Ce n'est pas encore TERMINÉ, je continue.") == []
