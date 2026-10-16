@@ -499,7 +499,7 @@ function creerRenduCowork(conteneur, interactif) {
       conteneur.append(bulle({ role: "gemini", texte: ev.resume.replace(/^TERMINÉ\s*:\s*/, ""), modele: null, niveau: null, duree: null }));
     } else {
       if (ev.type === "refus" && derniere) marquerEtape(derniere, "ko");
-      ajouterLigne(noteEtape(ev, ["autorise", "erreur_format"].includes(ev.type) ? "decision" : "ko"));
+      ajouterLigne(noteEtape(ev, ["autorise", "erreur_format", "erreur_gemini"].includes(ev.type) ? "decision" : "ko"));
     }
     defilerEnBas();
   };

@@ -88,3 +88,38 @@ def test_limite_d_etapes():
     evenements, _ = lancer([ACTION_LIRE] * 10, ex, TOUT_SUR, JAMAIS_DEMANDE, max_etapes=5)
     assert types(evenements)[-1] == "limite"
     assert ex.appels == 5
+
+
+def test_json_invalide_donne_un_rappel_precis():
+    casse = '{"action": "creer", "chemin": "a.py", "contenu": "x'
+    evs, envoyer = lancer([casse, "TERMINÉ : ok"], FauxExecuteur(), TOUT_SUR, JAMAIS_DEMANDE)
+    assert "erreur_format" in types(evs)
+    assert "guillemet" in envoyer.messages[1]
+
+
+def test_reponse_sans_action_donne_le_rappel_general():
+    evs, envoyer = lancer(["je réfléchis encore", "TERMINÉ : ok"], FauxExecuteur(), TOUT_SUR, JAMAIS_DEMANDE)
+    assert "guillemet" not in envoyer.messages[1] and "UNE action" in envoyer.messages[1]
+
+
+def test_erreur_de_gemini_renvoie_le_meme_message():
+    # « Sorry, something went wrong » n'est pas une faute de format : on renvoie le message.
+    ex = FauxExecuteur()
+    reponses = ["Gemini a dit\nSorry, something went wrong. Please try your request again.", ACTION_LIRE, "TERMINÉ : ok"]
+    evs, envoyer = lancer(reponses, ex, TOUT_SUR, JAMAIS_DEMANDE)
+    assert envoyer.messages[:2] == ["tâche", "tâche"]
+    assert "erreur_gemini" in types(evs) and "erreur_format" not in types(evs)
+    assert ex.appels == 1 and types(evs)[-1] == "termine"
+
+
+def test_reponse_vide_traitee_comme_erreur_de_gemini():
+    evs, envoyer = lancer(["Gemini a dit", "TERMINÉ : ok"], FauxExecuteur(), TOUT_SUR, JAMAIS_DEMANDE)
+    assert envoyer.messages[:2] == ["tâche", "tâche"] and "erreur_gemini" in types(evs)
+
+
+def test_erreur_de_gemini_deux_fois_arrete_clairement():
+    erreur = "Sorry, something went wrong. Please try your request again."
+    evs, envoyer = lancer([erreur, erreur, ACTION_LIRE], FauxExecuteur(), TOUT_SUR, JAMAIS_DEMANDE)
+    assert types(evs)[-1] == "erreur"
+    assert "Sorry, something went wrong" in evs[-1]["corps"]
+    assert len(envoyer.messages) == 2

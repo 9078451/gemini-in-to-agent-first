@@ -7,12 +7,10 @@ les fonctions qu'on lui donne, ce qui la rend simple à tester.
 from typing import Callable
 
 from cowork.actions import Resultat
-from cowork.format import Action, est_termine, formater_resultat, lire_action
+from cowork.format import Action, est_erreur_gemini, est_termine, formater_resultat, lire_action, rappel_pour
 
-_RAPPEL = (
-    "Format non compris. Réponds avec UNE action dans un unique bloc ```json, "
-    'par exemple {"action": "lire", "chemin": "x.py"}, ou « TERMINÉ : … » quand c\'est fini.'
-)
+# Quand Gemini répond par sa propre erreur, le même message est renvoyé une fois.
+ESSAIS_SI_ERREUR_GEMINI = 2
 
 
 def executer(
@@ -30,6 +28,15 @@ def executer(
     echecs = 0
     for _ in range(max_etapes):
         reponse = envoyer(message)
+        for _ in range(ESSAIS_SI_ERREUR_GEMINI - 1):
+            if not est_erreur_gemini(reponse):
+                break
+            emettre({"type": "erreur_gemini", "corps": reponse.strip()})
+            reponse = envoyer(message)
+        if est_erreur_gemini(reponse):
+            erreur = reponse.replace("Gemini a dit", "", 1).strip() or "réponse vide"
+            emettre({"type": "erreur", "corps": f"Gemini a répondu par une erreur deux fois de suite : « {erreur} ». Réessaie dans un moment."})
+            return
         action = lire_action(reponse)
         if action is None:
             if est_termine(reponse):
@@ -40,7 +47,7 @@ def executer(
             if echecs >= echecs_max:
                 emettre({"type": "termine", "resume": "Format non compris, arrêt."})
                 return
-            message = _RAPPEL
+            message = rappel_pour(reponse)
             continue
         echecs = 0
         emettre({"type": "action", "action": action.nom, "champs": action.champs})

@@ -16,6 +16,7 @@ const AUTRES = {
   autorise: { icone: "i-check", titre: "Action dangereuse autorisée d'office (toujours autoriser)" },
   refus: { icone: "i-fermer", titre: "Action refusée" },
   erreur_format: { icone: "i-alerte", titre: "Gemini n'a pas respecté le format, rappel envoyé" },
+  erreur_gemini: { icone: "i-alerte", titre: "Gemini a eu un problème, message renvoyé" },
   termine: { icone: "i-check", titre: "Terminé" },
   limite: { icone: "i-alerte", titre: "Limite d'étapes atteinte" },
   arret: { icone: "i-fermer", titre: "Tâche arrêtée" },

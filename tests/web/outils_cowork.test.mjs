@@ -38,3 +38,9 @@ test("nombre de lignes d'un contenu écrit", () => {
   assert.equal(nombreLignes("a"), "1 ligne");
   assert.equal(nombreLignes(""), "fichier vide");
 });
+
+test("libellé quand Gemini répond par sa propre erreur", () => {
+  const e = libelleEtape({ type: "erreur_gemini", corps: "Sorry, something went wrong." });
+  assert.match(e.titre, /Gemini/);
+  assert.match(e.titre, /renvoy/);
+});

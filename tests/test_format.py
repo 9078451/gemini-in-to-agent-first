@@ -46,3 +46,27 @@ def test_lire_action_dans_le_texte_affiche_par_gemini():
 
 def test_lire_action_ignore_un_objet_sans_action():
     assert lire_action('Voici un exemple : {"nom": "x"} et rien d\'autre.') is None
+
+
+def test_reparer_guillemets_non_echappes():
+    # Vraie réponse de Gemini (Flash-Lite) : guillemets laissés tels quels dans les textes.
+    msg = (
+        'Gemini a dit\nJSON\n{"action": "modifier", "chemin": "server.py", '
+        '"avant": "    with socketserver.TCPServer(("", PORT), httpd=MVCRequestHandler) as httpd:", '
+        '"apres": "    with socketserver.TCPServer(("", PORT), MVCRequestHandler) as httpd:"}'
+    )
+    assert lire_action(msg) == Action("modifier", {
+        "chemin": "server.py",
+        "avant": '    with socketserver.TCPServer(("", PORT), httpd=MVCRequestHandler) as httpd:',
+        "apres": '    with socketserver.TCPServer(("", PORT), MVCRequestHandler) as httpd:',
+    })
+
+
+def test_reparer_garde_les_echappements_valides():
+    msg = '{"action": "creer", "chemin": "a.py", "contenu": "print("bonjour")\\nx = \\"1\\""}'
+    assert lire_action(msg) == Action("creer", {"chemin": "a.py", "contenu": 'print("bonjour")\nx = "1"'})
+
+
+def test_reparer_n_invente_pas_d_action():
+    assert lire_action('{"chemin": "a", "contenu": "x"y"}') is None
+    assert lire_action('{"action": "creer", "chemin": "a.py", "contenu": "x') is None

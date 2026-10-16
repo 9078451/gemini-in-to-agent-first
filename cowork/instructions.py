@@ -23,6 +23,8 @@ Actions possibles (les chemins sont relatifs au dossier de travail) :
 
 Règles :
 - Une seule action par message, dans un bloc ```json.
+- Le JSON doit être valide : dans un texte entre guillemets (code, contenu de fichier…), \
+écris \\" pour un guillemet, \\n pour un retour à la ligne et \\\\ pour une barre oblique inverse.
 - Reste dans le dossier de travail.
 - Les suppressions et les commandes risquées demandent l'accord de l'utilisateur : c'est normal.
 - Quand la tâche est finie, écris une phrase commençant par « TERMINÉ : » (sans bloc json) \
