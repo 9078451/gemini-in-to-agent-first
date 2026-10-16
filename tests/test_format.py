@@ -1,51 +1,55 @@
-from cowork.format import Action, est_termine, formater_resultat, lire_action
+from cowork.catalogue import liste_compacte
+from cowork.format import PIED, Action, LigneResultat, est_erreur_gemini, formater_resultats, lire_actions, rappel_pour
 
 
-def test_lire_action_bloc_valide():
-    a = lire_action('```json\n{"action": "lire", "chemin": "x.py"}\n```')
-    assert a == Action("lire", {"chemin": "x.py"})
+def noms(message):
+    return [a.nom for a in lire_actions(message)]
 
 
-def test_lire_action_ignore_le_texte_autour():
+def test_un_bloc_une_action():
+    assert lire_actions('```json\n{"action": "read", "path": "x.py"}\n```') == [Action("read", {"path": "x.py"})]
+
+
+def test_plusieurs_blocs_dans_l_ordre():
     msg = (
-        "Je vais lire le fichier.\n"
-        '```json\n{"action":"lire","chemin":"a"}\n```\n'
-        '```json\n{"action":"lire","chemin":"b"}\n```'
+        "Je vais lire les fichiers.\n"
+        '```json\n{"action":"read","path":"a"}\n```\n'
+        '```json\n{"action":"read","path":"b"}\n```'
     )
-    assert lire_action(msg) == Action("lire", {"chemin": "a"})
+    assert [a.champs["path"] for a in lire_actions(msg)] == ["a", "b"]
 
 
-def test_lire_action_json_casse():
-    assert lire_action("```json\n{action: lire}\n```") is None
+def test_liste_dans_un_bloc():
+    msg = '```json\n[{"action": "read", "path": "a"}, {"action": "list"}]\n```'
+    assert noms(msg) == ["read", "list"]
 
 
-def test_lire_action_sans_cle_action():
-    assert lire_action('```json\n{"chemin": "x"}\n```') is None
+def test_liste_affichee_par_gemini_web():
+    # Gemini web affiche le bloc de code sans les ``` : « JSON » puis la liste, après « Gemini a dit ».
+    msg = (
+        'Gemini a dit\nJe commence.\nJSON\n[\n {"action": "plan", "steps": ["[ ] lire"]},\n'
+        ' {"action": "list", "path": "."}\n]'
+    )
+    assert noms(msg) == ["plan", "list"]
 
 
-def test_lire_action_aucun_bloc():
-    assert lire_action("TERMINÉ : voilà, c'est fait.") is None
-
-
-def test_est_termine():
-    assert est_termine("TERMINÉ : fini") is True
-    assert est_termine('```json\n{"action":"lire","chemin":"x"}\n```') is False
-    assert est_termine("je réfléchis encore") is False
-
-
-def test_formater_resultat():
-    assert formater_resultat(True, "deux fichiers") == "OK\ndeux fichiers"
-    assert formater_resultat(False, "fichier absent") == "ERREUR : fichier absent"
-
-
-def test_lire_action_dans_le_texte_affiche_par_gemini():
-    # Gemini web affiche le bloc de code sans les ``` : « JSON » puis l'objet.
+def test_objet_affiche_sans_backticks():
     msg = 'Je crée le fichier.\nJSON\n{\n  "action": "creer",\n  "chemin": "a.txt",\n  "contenu": "x { y }"\n}'
-    assert lire_action(msg) == Action("creer", {"chemin": "a.txt", "contenu": "x { y }"})
+    assert lire_actions(msg) == [Action("create", {"path": "a.txt", "content": "x { y }"})]
 
 
-def test_lire_action_ignore_un_objet_sans_action():
-    assert lire_action('Voici un exemple : {"nom": "x"} et rien d\'autre.') is None
+def test_plusieurs_objets_affiches_sans_backticks():
+    msg = 'JSON\n{"action": "create", "path": "a", "content": "{ [ ] }"}\nJSON\n{"action": "read", "path": "a"}'
+    assert noms(msg) == ["create", "read"]
+
+
+def test_ignore_un_objet_sans_action():
+    assert lire_actions('Voici un exemple : {"nom": "x"} et rien d\'autre.') == []
+
+
+def test_rien_a_lire():
+    assert lire_actions("je réfléchis") == []
+    assert lire_actions("```json\n{action: lire}\n```") == []
 
 
 def test_reparer_guillemets_non_echappes():
@@ -55,18 +59,76 @@ def test_reparer_guillemets_non_echappes():
         '"avant": "    with socketserver.TCPServer(("", PORT), httpd=MVCRequestHandler) as httpd:", '
         '"apres": "    with socketserver.TCPServer(("", PORT), MVCRequestHandler) as httpd:"}'
     )
-    assert lire_action(msg) == Action("modifier", {
-        "chemin": "server.py",
-        "avant": '    with socketserver.TCPServer(("", PORT), httpd=MVCRequestHandler) as httpd:',
-        "apres": '    with socketserver.TCPServer(("", PORT), MVCRequestHandler) as httpd:',
-    })
+    assert lire_actions(msg) == [Action("edit", {
+        "path": "server.py",
+        "old": '    with socketserver.TCPServer(("", PORT), httpd=MVCRequestHandler) as httpd:',
+        "new": '    with socketserver.TCPServer(("", PORT), MVCRequestHandler) as httpd:',
+    })]
+
+
+def test_reparer_avec_cles_anglaises():
+    msg = '{"action": "create", "path": "a.py", "content": "print("hi")"}'
+    assert lire_actions(msg) == [Action("create", {"path": "a.py", "content": 'print("hi")'})]
 
 
 def test_reparer_garde_les_echappements_valides():
     msg = '{"action": "creer", "chemin": "a.py", "contenu": "print("bonjour")\\nx = \\"1\\""}'
-    assert lire_action(msg) == Action("creer", {"chemin": "a.py", "contenu": 'print("bonjour")\nx = "1"'})
+    assert lire_actions(msg) == [Action("create", {"path": "a.py", "content": 'print("bonjour")\nx = "1"'})]
 
 
 def test_reparer_n_invente_pas_d_action():
-    assert lire_action('{"chemin": "a", "contenu": "x"y"}') is None
-    assert lire_action('{"action": "creer", "chemin": "a.py", "contenu": "x') is None
+    assert lire_actions('{"chemin": "a", "contenu": "x"y"}') == []
+    assert lire_actions('{"action": "creer", "chemin": "a.py", "contenu": "x') == []
+
+
+def test_termine_francais_vaut_done():
+    assert lire_actions("TERMINÉ : fini") == [Action("done", {"summary": "fini"})]
+
+
+def test_termine_dans_un_contenu_n_est_pas_une_fin():
+    msg = '```json\n{"action": "create", "path": "a.txt", "content": "TERMINÉ"}\n```'
+    assert noms(msg) == ["create"]
+
+
+def test_formater_resultats():
+    lignes = [
+        LigneResultat(1, Action("create", {"path": "a.txt", "content": ""}), "OK", "a.txt created (1 line)"),
+        LigneResultat(2, Action("run", {"command": "python x.py"}), "ERROR (exit code 1)", "boum"),
+        LigneResultat(3, Action("create", {"path": "b.txt", "content": ""}), "SKIPPED", "an earlier action failed"),
+    ]
+    texte = formater_resultats(lignes, 8000, 30000)
+    assert texte.startswith("RESULTS\n[1] create a.txt: OK\na.txt created (1 line)\n")
+    assert '[2] run "python x.py": ERROR (exit code 1)\nboum' in texte
+    assert "[3] create b.txt: SKIPPED" in texte
+    assert texte.endswith(PIED)
+
+
+def test_formater_resultats_avec_note():
+    ligne = LigneResultat(1, Action("list", {}), "OK", "a")
+    texte = formater_resultats([ligne], 8000, 30000, note="NOT FINISHED: x")
+    assert "NOT FINISHED: x\n---\n" in texte
+
+
+def test_resultat_coupe():
+    ligne = LigneResultat(1, Action("read", {"path": "a"}), "OK", "x" * 50)
+    assert "…(cut)" in formater_resultats([ligne], 10, 30000)
+
+
+def test_message_entier_coupe():
+    lignes = [LigneResultat(i, Action("read", {"path": "a"}), "OK", "x" * 100) for i in range(1, 6)]
+    texte = formater_resultats(lignes, 8000, 300)
+    assert len(texte) < 300 + len(PIED) + 50 and texte.endswith(PIED)
+
+
+def test_rappel_json_abime():
+    assert '\\"' in rappel_pour('{"action": "x", oups')
+
+
+def test_rappel_general():
+    assert liste_compacte() in rappel_pour("je réfléchis à voix haute")
+
+
+def test_erreur_gemini():
+    assert est_erreur_gemini("Gemini a dit\nSorry, something went wrong. Please try your request again.")
+    assert est_erreur_gemini("")
+    assert not est_erreur_gemini('```json\n{"action": "list"}\n```')

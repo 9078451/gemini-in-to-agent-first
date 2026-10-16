@@ -1,49 +1,80 @@
 """Lire les actions que Gemini demande, et former les résultats qu'on lui renvoie.
 
-Gemini demande une action en écrivant un unique bloc ```json contenant un objet
-avec une clé « action ». Agent First l'exécute et renvoie un bloc « OK … » ou
-« ERREUR : … ».
+Gemini écrit ses actions en JSON : un ou plusieurs blocs ```json, chacun avec un
+objet action ou une liste d'actions. Gemini web affiche souvent ces blocs sans
+leurs ``` (« JSON » puis l'objet) : on balaie alors le texte. Agent First répond
+par un bloc « RESULTS » qui donne le sort de chaque action du lot.
 """
 import json
 import re
 from dataclasses import dataclass
 
-_BLOC = re.compile(r"```json\s*(\{.*?\})\s*```", re.S)
+from cowork.catalogue import CLES, Action, liste_compacte, normaliser, resume_action
+
+__all__ = ["Action", "LigneResultat", "PIED", "lire_actions", "formater_resultats", "rappel_pour", "est_erreur_gemini"]
+
+_BLOC = re.compile(r"```json\s*(.*?)\s*```", re.S)
+_DEBUT_JSON = re.compile(r"[\[{]")
+COUPE = "\n…(cut)"
+PIED = (
+    'Reply with JSON actions only. Finish with {"action": "done", "summary": "…"} '
+    "once every plan step is [x] and verified."
+)
 
 
 @dataclass(frozen=True)
-class Action:
-    nom: str
-    champs: dict[str, str]
+class LigneResultat:
+    rang: int
+    action: Action
+    statut: str  # « OK », « ERROR », « ERROR (exit code N) » ou « SKIPPED »
+    corps: str
 
 
-def lire_action(message: str) -> Action | None:
-    """Premier bloc json valide contenant une clé « action ». None sinon.
+def lire_actions(message: str) -> list[Action]:
+    """Toutes les actions du message, dans l'ordre. [] si aucune."""
+    actions = [a for bloc in _BLOC.finditer(message) for a in _depuis_texte_json(bloc.group(1))]
+    if actions:
+        return actions
+    actions = _balayer(message)
+    if actions:
+        return actions
+    reparee = _reparer(message)
+    if reparee:
+        return [reparee]
+    if "TERMINÉ" in message:  # ancien format de fin, sans JSON
+        return [Action("done", {"summary": message.split("TERMINÉ", 1)[1].lstrip(" :\n").strip()})]
+    return []
 
-    Gemini web affiche le bloc de code sans ses ``` (« JSON » puis l'objet) : à
-    défaut de bloc balisé, on prend le premier objet JSON du texte qui a une clé
-    « action ».
-    """
-    for correspondance in _BLOC.finditer(message):
-        action = _vers_action(correspondance.group(1))
-        if action:
-            return action
+
+def _depuis_texte_json(texte: str) -> list[Action]:
+    try:
+        return _depuis_objet(json.loads(texte))
+    except ValueError:
+        return []
+
+
+def _depuis_objet(objet) -> list[Action]:
+    elements = objet if isinstance(objet, list) else [objet]
+    actions = (normaliser(e) for e in elements if isinstance(e, dict))
+    return [a for a in actions if a is not None]
+
+
+def _balayer(message: str) -> list[Action]:
+    """Chaque objet ou liste JSON du texte ; on reprend la lecture après sa fin,
+    pour ne jamais relire les accolades d'un contenu de fichier."""
     decodeur = json.JSONDecoder()
-    for position, caractere in enumerate(message):
-        if caractere != "{":
-            continue
+    actions, position = [], 0
+    while (debut := _DEBUT_JSON.search(message, position)) is not None:
         try:
-            objet, _fin = decodeur.raw_decode(message, position)
+            objet, fin = decodeur.raw_decode(message, debut.start())
         except ValueError:
+            position = debut.start() + 1
             continue
-        action = _vers_action(objet)
-        if action:
-            return action
-    return _reparer(message)
+        actions += _depuis_objet(objet)
+        position = fin
+    return actions
 
 
-# Clés possibles d'une action : elles servent de bornes pour relire un JSON abîmé.
-CLES = ("action", "chemin", "contenu", "avant", "apres", "texte", "motif", "glob")
 _CLE = re.compile(r'(?:^|[{,])\s*"(%s)"\s*:\s*"' % "|".join(CLES))
 _FIN_VALEUR = re.compile(r'"\s*,\s*$')
 _FIN_OBJET = re.compile(r'"\s*}\s*$')
@@ -52,7 +83,7 @@ _ECHAPPEMENTS = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "/": "/"
 
 def _reparer(message: str) -> Action | None:
     """Gemini oublie parfois d'échapper les guillemets dans les textes
-    (« "avant": "TCPServer(("", PORT))" ») : le JSON est invalide. On relit
+    (« "old": "TCPServer(("", PORT))" ») : le JSON est invalide. On relit
     alors l'objet en prenant les clés connues comme bornes des valeurs."""
     debut_action = message.find('"action"')
     debut = message.rfind("{", 0, debut_action + 1) if debut_action >= 0 else -1
@@ -71,8 +102,7 @@ def _reparer(message: str) -> Action | None:
         if borne is None:
             return None
         champs[cle.group(1)] = _desechapper(suite[: borne.start()])
-    nom = champs.pop("action")
-    return Action(nom=nom, champs=champs) if nom else None
+    return normaliser(champs)
 
 
 def _desechapper(texte: str) -> str:
@@ -80,27 +110,40 @@ def _desechapper(texte: str) -> str:
     return re.sub(r"\\(.)", lambda m: _ECHAPPEMENTS.get(m.group(1), m.group(0)), texte, flags=re.S)
 
 
-def _vers_action(source) -> Action | None:
-    if isinstance(source, str):
-        try:
-            source = json.loads(source)
-        except ValueError:
-            return None
-    if isinstance(source, dict) and isinstance(source.get("action"), str):
-        champs = {k: str(v) for k, v in source.items() if k != "action"}
-        return Action(nom=source["action"], champs=champs)
-    return None
+def _couper(texte: str, taille_max: int) -> str:
+    return texte if len(texte) <= taille_max else texte[:taille_max] + COUPE
 
 
-RAPPEL_GENERAL = (
-    "Format non compris. Réponds avec UNE action dans un unique bloc ```json, "
-    'par exemple {"action": "lire", "chemin": "x.py"}, ou « TERMINÉ : … » quand c\'est fini.'
-)
+def formater_resultats(lignes: list[LigneResultat], taille_max: int, taille_max_message: int, note: str = "") -> str:
+    blocs = []
+    for ligne in lignes:
+        entete = f"[{ligne.rang}] {resume_action(ligne.action)}: {ligne.statut}"
+        corps = _couper(ligne.corps, taille_max)
+        blocs.append(f"{entete}\n{corps}" if corps else entete)
+    texte = _couper("RESULTS\n" + "\n".join(blocs), taille_max_message)
+    if note:
+        texte += f"\n{note}"
+    return f"{texte}\n---\n{PIED}"
+
+
 RAPPEL_JSON = (
-    "Ton bloc JSON est invalide. Dans un texte entre guillemets, écris \\\" pour un guillemet, "
-    "\\n pour un retour à la ligne et \\\\ pour une barre oblique inverse. "
-    "Renvoie la même action, corrigée, dans un unique bloc ```json."
+    "Your JSON is invalid. Inside strings, write \\\" for a quote, \\n for a new line and \\\\ for a backslash. "
+    "Send the same actions again, fixed, in one ```json block."
 )
+
+
+def rappel_pour(message: str) -> str:
+    """Le rappel à envoyer après une réponse illisible : précis si Gemini a
+    tenté une action (JSON abîmé), complet sinon."""
+    if '"action"' in message:
+        return RAPPEL_JSON
+    return (
+        "Format not understood. Your messages must contain ONLY JSON actions in one ```json block "
+        "(an action object or a list of actions). Do the work yourself with actions; "
+        'finish with {"action": "done", "summary": "…"}.\n'
+        f"ACTIONS\n{liste_compacte()}"
+    )
+
 
 # Messages que Gemini affiche quand LUI a un problème (pas une faute de format).
 _ERREUR_GEMINI = re.compile(
@@ -110,24 +153,9 @@ _ERREUR_GEMINI = re.compile(
 )
 
 
-def rappel_pour(message: str) -> str:
-    """Le rappel à envoyer après une réponse illisible : précis si Gemini a
-    tenté une action (JSON abîmé), général sinon."""
-    return RAPPEL_JSON if '"action"' in message else RAPPEL_GENERAL
-
-
 def est_erreur_gemini(message: str) -> bool:
     """Réponse vide, ou message d'erreur de Gemini lui-même (« Sorry, something went wrong »)."""
     texte = message.replace("Gemini a dit", "", 1).strip()
     if not texte:
         return True
-    return len(texte) < 300 and lire_action(message) is None and bool(_ERREUR_GEMINI.search(texte))
-
-
-def est_termine(message: str) -> bool:
-    """Vrai si le message annonce la fin (aucune action et le mot TERMINÉ)."""
-    return lire_action(message) is None and "TERMINÉ" in message
-
-
-def formater_resultat(ok: bool, corps: str) -> str:
-    return f"OK\n{corps}" if ok else f"ERREUR : {corps}"
+    return len(texte) < 300 and not lire_actions(message) and bool(_ERREUR_GEMINI.search(texte))
