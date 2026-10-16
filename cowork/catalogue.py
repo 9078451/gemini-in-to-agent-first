@@ -117,7 +117,4 @@ def resume_action(action: Action) -> str:
 
 
 def liste_compacte() -> str:
-    largeur = max(len(json.dumps(d.exemple, ensure_ascii=False)) for d in _DEFINITIONS)
-    return "\n".join(
-        f"{json.dumps(d.exemple, ensure_ascii=False):<{largeur}}  {d.aide}" for d in _DEFINITIONS
-    )
+    return "\n".join(f"- {json.dumps(d.exemple, ensure_ascii=False)} : {d.aide}" for d in _DEFINITIONS)

@@ -1,47 +1,106 @@
-"""Le premier message envoyé à Gemini au début d'une conversation Cowork.
+"""Le cadre envoyé à Gemini avec chaque demande de l'utilisateur en mode Cowork.
 
-Il cadre Gemini : son rôle, le dossier de travail, la liste des actions, le
-format exact (un seul bloc JSON), les règles et un exemple. Tout repose là-dessus.
+Gemini web n'est pas fait pour piloter un PC : sans rappel, il redevient un chat
+qui conseille au lieu d'agir. Chaque demande part donc avec son rôle, les actions
+(tirées du catalogue), la marche à suivre, l'état du dossier et la demande elle-même,
+bien délimitée. En anglais : Gemini suit ces consignes plus précisément ; il parle
+français à l'utilisateur.
 """
 from pathlib import Path
 
-_GABARIT = """Tu es l'assistant d'Agent First. Tu travailles sur l'ordinateur de l'utilisateur, \
-dans le dossier de travail : {dossier}
+from cowork.catalogue import liste_compacte
 
-Pour agir, tu écris UNE SEULE action, dans un unique bloc de code json, et RIEN d'autre \
-dans ce message. Agent First l'exécute et te renvoie le résultat (« OK … » ou « ERREUR : … »). \
-Tu attends ce résultat avant l'action suivante.
+DOSSIERS_IGNORES = {".git", "node_modules", "__pycache__", ".venv", "venv"}
+_COMPTE_MAX = 10000  # au-delà, on ne compte plus le reste d'un très gros dossier
 
-Actions possibles (les chemins sont relatifs au dossier de travail) :
-- {{"action": "lister", "chemin": "."}}                      liste un dossier
-- {{"action": "lire", "chemin": "x.py"}}                     lit un fichier
-- {{"action": "chercher", "motif": "def ", "glob": "**/*.py"}} cherche un texte
-- {{"action": "creer", "chemin": "x.py", "contenu": "..."}}   crée ou réécrit un fichier
-- {{"action": "modifier", "chemin": "x.py", "avant": "...", "apres": "..."}} remplace un passage exact
-- {{"action": "supprimer", "chemin": "x.py"}}                supprime un fichier ou dossier
-- {{"action": "commande", "texte": "python x.py"}}           lance une commande PowerShell
+_GABARIT = """[AGENT FIRST · COWORK]
+You are the Cowork agent of Agent First, running on the user's Windows PC.
+You do the work yourself by sending actions; Agent First executes them and sends back the results. \
+Never tell the user to run something: run it yourself.
 
-Règles :
-- Une seule action par message, dans un bloc ```json.
-- Le JSON doit être valide : dans un texte entre guillemets (code, contenu de fichier…), \
-écris \\" pour un guillemet, \\n pour un retour à la ligne et \\\\ pour une barre oblique inverse.
-- Reste dans le dossier de travail.
-- Les suppressions et les commandes risquées demandent l'accord de l'utilisateur : c'est normal.
-- Quand la tâche est finie, écris une phrase commençant par « TERMINÉ : » (sans bloc json) \
-qui résume ce que tu as fait.
+HOW TO ANSWER
+- Your messages contain ONLY JSON actions: one ```json block with an action object or a list of actions. \
+Up to {max_actions} per message, run in order, stopping at the first error.
+- Write to the user in French inside the actions (plan steps, questions, summary).
+- JSON strings: escape " as \\", new lines as \\n, backslashes as \\\\.
 
-Exemple :
-Toi : ```json
-{{"action": "creer", "chemin": "bonjour.txt", "contenu": "Salut"}}
-```
-Agent First : OK
-bonjour.txt écrit
-Toi : TERMINÉ : j'ai créé bonjour.txt avec le texte « Salut »."""
+ACTIONS
+{actions}
+
+WORKFLOW
+1. Plan first: restate the request as concrete steps with "plan".
+2. Look before changing: list, read or search what you will touch.
+3. Do the steps; send the plan again with [x] as steps get done.
+4. Verify: run the code or the tests; for a server, start it then visit it. Fix what fails.
+5. Finish with "done" only when every step is [x] and verified: Agent First refuses it otherwise. \
+If the request is unclear, use "ask".
+
+SAFETY
+File actions only work inside the working folder. Deletions and risky commands need the user's approval; \
+Agent First asks for it. If refused, find another way.
+
+WORKING FOLDER: {dossier}   (all paths are relative to it)
+FOLDER CONTENT:
+{contenu}
+RUNNING PROCESSES: {processus}
+LAST TASK: {derniere_tache}
+
+{entete}
+\"\"\"
+{demande}
+\"\"\"
+Reply now with your first actions."""
 
 
-def mode_emploi(dossier: Path) -> str:
-    return _GABARIT.format(dossier=dossier)
+def cadre(
+    dossier: Path,
+    demande: str,
+    *,
+    contenu: str,
+    processus: str,
+    derniere_tache: str,
+    reponse: bool,
+    max_actions: int,
+) -> str:
+    return _GABARIT.format(
+        max_actions=max_actions,
+        actions=liste_compacte(),
+        dossier=dossier,
+        contenu=contenu,
+        processus=processus or "none",
+        derniere_tache=derniere_tache or "none",
+        entete="USER ANSWER TO YOUR QUESTION:" if reponse else "USER REQUEST:",
+        demande=demande,
+    )
 
 
-def premier_message(dossier: Path, texte: str) -> str:
-    return f"{mode_emploi(dossier)}\n\nTâche : {texte}"
+def arborescence(dossier: Path, max_entrees: int) -> str:
+    """Le contenu du dossier, dossiers d'abord, indenté ; coupé à `max_entrees` lignes."""
+    lignes, reste = [], 0
+    for ligne in _entrees(dossier, 0):
+        if len(lignes) < max_entrees:
+            lignes.append(ligne)
+        else:
+            reste += 1
+            if reste >= _COMPTE_MAX:
+                break
+    if not lignes:
+        return "(empty)"
+    if reste:
+        lignes.append(f"… ({reste}{'+' if reste >= _COMPTE_MAX else ''} more)")
+    return "\n".join(lignes)
+
+
+def _entrees(dossier: Path, profondeur: int):
+    try:
+        enfants = sorted(dossier.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    except OSError:
+        return
+    retrait = "  " * profondeur
+    for enfant in enfants:
+        if not enfant.is_dir():
+            yield retrait + enfant.name
+        elif enfant.name not in DOSSIERS_IGNORES:
+            yield f"{retrait}{enfant.name}/"
+            if not enfant.is_symlink():  # pas de boucle sans fin sur un lien vers un parent
+                yield from _entrees(enfant, profondeur + 1)
