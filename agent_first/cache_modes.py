@@ -1,7 +1,8 @@
 """Les modèles et niveaux de réflexion proposés par Gemini, lus une fois puis gardés.
 
-Partagé par l'app et l'API réseau. Tant que Chrome est fermé, que Gemini est
-occupé ou que la lecture échoue, la liste par défaut (`config`) sert.
+Partagé par l'app et l'API réseau, lu dans l'onglet du Chat : une tâche Cowork (dans
+son propre onglet) ne l'empêche pas. Tant que Chrome est fermé, que l'onglet du Chat
+est occupé ou que la lecture échoue, la liste par défaut (`config`) sert.
 """
 import logging
 
@@ -12,15 +13,15 @@ journal = logging.getLogger(__name__)
 
 
 class CacheModes:
-    def __init__(self, file: FileAttente, chrome_lance, par_defaut: Modes) -> None:
-        self._file = file
+    def __init__(self, file_chat: FileAttente, chrome_lance, par_defaut: Modes) -> None:
+        self._file = file_chat
         self._chrome_lance = chrome_lance
         self._par_defaut = par_defaut
         self._modes: Modes | None = None
 
     def lire(self) -> Modes:
-        # Gemini occupé (une tâche Cowork peut durer des minutes) : on n'attend pas son tour,
-        # la liste par défaut sert et la vraie sera lue quand Gemini sera libre.
+        # Onglet du Chat occupé (une longue réponse) : on n'attend pas son tour,
+        # la liste par défaut sert et la vraie sera lue quand il sera libre.
         if self._modes is None and self._chrome_lance() and not self._file.occupee():
             futur = self._file.soumettre(lambda pilote: pilote.lister_modes())
             try:

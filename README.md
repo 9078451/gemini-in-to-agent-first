@@ -22,6 +22,13 @@ s'ouvre dans sa propre fenêtre. Le Chrome dédié s'ouvre aussitôt sur Gemini,
 arrière-plan, pour que le premier message n'attende pas. Fermer la console
 arrête Agent First.
 
+Le Chrome dédié a **deux fenêtres Gemini** : l'une pour les tâches Cowork,
+l'autre pour le Chat et l'API réseau. Le Chat répond donc pendant qu'une tâche
+Cowork tourne. Laisse-les ouvertes (cachées derrière d'autres, elles continuent
+d'écrire) ; une fenêtre fermée est rouverte au message suivant. Si le Chrome
+dédié était déjà ouvert avant la mise à jour, ferme-le une fois : Agent First le
+relance avec les bons réglages.
+
 - **Nouvelle conversation**, choix du **modèle** et du **niveau de réflexion**
   en haut de la discussion ; Entrée envoie, Maj+Entrée va à la ligne.
 - **Accueil / Historique** : statistiques, recherche, reprise ou retrait d'une
@@ -91,7 +98,8 @@ print(reponse.choices[0].message.content)
 ```
 
 Renvoyer l'historique complet (comme le fait un client OpenAI) continue la même
-conversation Gemini.
+conversation Gemini. Ces appels passent par la fenêtre du Chat : ils répondent
+pendant une tâche Cowork, mais un à la fois (les suivants attendent leur tour).
 
 **Tâches Cowork** :
 

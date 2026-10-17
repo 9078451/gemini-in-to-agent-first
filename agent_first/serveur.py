@@ -71,7 +71,7 @@ def erreur(code: int, message: str) -> JSONResponse:
 
 
 def creer_app(
-    file: FileAttente,
+    file_chat: FileAttente,
     historique: Historique,
     delai: float,
     chrome_lance: Callable[[], bool],
@@ -85,11 +85,13 @@ def creer_app(
     adresse_api: str | None = None,
     hotes_autorises: list[str] | None = None,
 ) -> FastAPI:
+    """`file_chat` : la file de l'onglet du Chat (messages du Chat, état de Google, modèles) ;
+    les tâches Cowork passent par celle du service `cowork`."""
     app = FastAPI(title="Agent First")
     if hotes_autorises:
         # Une page web ne doit pas pouvoir joindre l'app par « reliure DNS » (et lire la clé de l'API).
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=hotes_autorises)
-    modes = cache_modes or CacheModes(file, chrome_lance, modes_par_defaut)
+    modes = cache_modes or CacheModes(file_chat, chrome_lance, modes_par_defaut)
 
     @app.exception_handler(RequestValidationError)
     def demande_invalide(_requete, _exc):
@@ -101,7 +103,7 @@ def creer_app(
         google = None
         if lance:
             try:
-                google = file.soumettre(lambda pilote: pilote.est_connecte()).result(timeout=5)
+                google = file_chat.soumettre(lambda pilote: pilote.est_connecte()).result(timeout=5)
             except Exception:
                 google = None  # occupé ou injoignable : inconnu
         return {"agent_first": True, "chrome": lance, "google": google}
@@ -212,7 +214,7 @@ def creer_app(
             historique.ajouter_message(identifiant, "toi", demande.texte, modele=demande.modele, niveau=demande.niveau)
         except ConversationInconnue:
             return erreur(404, INCONNUE)
-        futur = file.soumettre(lambda pilote: pilote.envoyer(adresse, demande.texte, demande.modele, demande.niveau))
+        futur = file_chat.soumettre(lambda pilote: pilote.envoyer(adresse, demande.texte, demande.modele, demande.niveau))
         try:
             resultat = futur.result(timeout=delai)
         except DelaiFutur:

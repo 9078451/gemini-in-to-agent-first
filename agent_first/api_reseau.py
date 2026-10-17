@@ -75,7 +75,7 @@ class DecisionTache(BaseModel):
 
 
 def creer_api_reseau(
-    file: FileAttente,
+    file_chat: FileAttente,
     historique: Historique,
     cowork: ServiceCowork,
     garde: GardeCle,
@@ -83,6 +83,7 @@ def creer_api_reseau(
     delai: float,
     niveau_cowork: str | None = None,
 ) -> FastAPI:
+    """`file_chat` : la file de l'onglet du Chat ; les tâches Cowork passent par celle de `cowork`."""
     app = FastAPI(
         title="Agent First — API réseau",
         description="Gemini au format OpenAI (`/v1/chat/completions`) et tâches Cowork (`/v1/cowork`). "
@@ -137,7 +138,7 @@ def creer_api_reseau(
             conversation_id, adresse = historique.creer(modele, niveau, "chat", None, source="api").id, None
             texte = mettre_a_plat(demande.messages)
         _noter(conversation_id, "toi", dernier, modele=modele, niveau=niveau)
-        futur = file.soumettre(lambda pilote: pilote.envoyer(adresse, texte, modele, niveau))
+        futur = file_chat.soumettre(lambda pilote: pilote.envoyer(adresse, texte, modele, niveau))
         try:
             resultat = futur.result(timeout=delai)
         except DelaiFutur:

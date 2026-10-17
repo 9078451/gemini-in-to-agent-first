@@ -4,7 +4,8 @@ processus en arrière-plan de chaque conversation.
 
 Chaque demande part avec le cadre complet (rôle, actions, dossier, processus,
 dernière tâche) : sans ce rappel, Gemini redevenait un chat dès le 2ᵉ message.
-Une seule tâche Gemini à la fois (un seul Chrome dédié, sérialisé par la file).
+Les tâches passent une par une dans l'onglet Gemini de Cowork (sa file) ; le Chat et
+l'API ont leur propre onglet et répondent pendant ce temps.
 """
 import json
 import logging
@@ -87,8 +88,8 @@ class ServiceCowork:
         self._fabrique_executeur = fabrique_executeur
         self._reglages = reglages
         self._fabrique_processus = fabrique_processus
-        # La tâche tourne dans la file de Gemini : un accord jamais donné (fenêtre fermée…)
-        # la bloquerait, Chat compris. Passé ce délai, la tâche s'arrête.
+        # La tâche tourne dans la file de Cowork : un accord jamais donné (fenêtre fermée…)
+        # bloquerait les tâches suivantes. Passé ce délai, la tâche s'arrête.
         self._delai_accord = delai_accord
         # Limite par message à Gemini (None = celle du pilote) : 4 Argon peut réfléchir
         # plusieurs minutes avant d'écrire, plus longtemps que la limite du Chat.
