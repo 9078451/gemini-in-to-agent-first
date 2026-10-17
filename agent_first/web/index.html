@@ -32,6 +32,13 @@
     <symbol id="i-alerte" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.5v.01"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></symbol>
+    <symbol id="i-texte" viewBox="0 0 24 24"><path d="M5 6.5h14M5 11h14M5 15.5h9"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 15.5l-4.5-4.5-8.5 8.5"/></symbol>
+    <symbol id="i-video" viewBox="0 0 24 24"><rect x="3.5" y="6" width="12.5" height="12" rx="2.5"/><path d="M16 10.5l4.5-2.5v8l-4.5-2.5"/></symbol>
+    <symbol id="i-musique" viewBox="0 0 24 24"><path d="M9 17.5V6l10-2v11.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/></symbol>
+    <symbol id="i-telecharger" viewBox="0 0 24 24"><path d="M12 4.5v11M7 11l5 5 5-5M5 19.5h14"/></symbol>
+    <symbol id="i-ouvrir" viewBox="0 0 24 24"><path d="M14 4.5h5.5V10M19.5 4.5l-8 8M17 14v4a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18V8.5A1.5 1.5 0 0 1 6 7h4"/></symbol>
+    <symbol id="i-reessayer" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4"/></symbol>
   </svg>
 
   <aside class="barre">
@@ -99,6 +106,12 @@
         <form class="saisie" id="form-saisie">
           <textarea id="saisie" rows="1" placeholder="Demande à Gemini…" aria-label="Ton message"></textarea>
           <div class="saisie-bas">
+            <div class="menu-reglage" id="zone-outil">
+              <button class="reglage" id="bouton-outil" type="button" aria-haspopup="listbox" aria-expanded="false" title="Créer une image, une vidéo ou de la musique">
+                <svg id="icone-outil"><use href="#i-texte"/></svg><span id="nom-outil">Texte</span><svg><use href="#i-chevron"/></svg>
+              </button>
+              <div class="menu" id="menu-outils" role="listbox" aria-label="Créer" hidden></div>
+            </div>
             <div class="menu-reglage">
               <button class="reglage" id="bouton-modele" type="button" aria-haspopup="listbox" aria-expanded="false" title="Modèle">
                 <span id="nom-modele">Modèle</span><svg><use href="#i-chevron"/></svg>
@@ -115,7 +128,7 @@
             <button class="envoyer" id="envoyer" type="submit" aria-label="Envoyer"><svg><use href="#i-fleche-haut"/></svg></button>
           </div>
         </form>
-        <div class="pied">Entrée pour envoyer · Maj+Entrée pour aller à la ligne</div>
+        <div class="pied" id="pied">Entrée pour envoyer · Maj+Entrée pour aller à la ligne</div>
       </div>
     </section>
 
@@ -138,6 +151,18 @@
       <p class="note">S'appliquent aux nouvelles conversations. Gardés dans ce navigateur.</p>
       <div class="etats" id="etats"></div>
       <section class="api-reseau" id="api-reseau"></section>
+    </form>
+  </dialog>
+
+  <dialog id="visionneuse" class="visionneuse" aria-label="Image">
+    <form method="dialog" class="visionneuse-cadre">
+      <img id="visionneuse-image" alt="">
+      <div class="visionneuse-barre">
+        <span id="visionneuse-legende"></span>
+        <a class="bouton-lien" id="visionneuse-ouvrir" target="_blank" rel="noopener"><svg><use href="#i-ouvrir"/></svg>Ouvrir</a>
+        <a class="bouton-lien" id="visionneuse-telecharger" download><svg><use href="#i-telecharger"/></svg>Télécharger</a>
+        <button class="icone" value="fermer" aria-label="Fermer"><svg><use href="#i-fermer"/></svg></button>
+      </div>
     </form>
   </dialog>
 </body>

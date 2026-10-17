@@ -12,8 +12,11 @@ import time
 import uuid
 from typing import Iterator
 
-EFFORTS = {"minimal": "Min.", "low": "Min.", "medium": "Moyen", "high": "Max."}
+EFFORTS = {"none": "Min.", "minimal": "Min.", "low": "Min.", "medium": "Moyen", "high": "Max.", "xhigh": "Max."}
 ROLES_SYSTEME = ("system", "developer")
+# Noms qui désignent « le modèle déjà choisi dans Gemini » (clients qui imposent un nom).
+MODELES_COURANTS = {"", "agent-first", "default", "auto", "gemini"}
+PIECES_JOINTES = {"image_url": "image", "input_image": "image", "input_audio": "audio", "file": "fichier", "input_file": "fichier"}
 
 
 def niveau_depuis_effort(effort: str | None) -> str | None:
@@ -22,14 +25,48 @@ def niveau_depuis_effort(effort: str | None) -> str | None:
 
 
 def texte_message(contenu) -> str:
-    """Le texte d'un message OpenAI (chaîne, ou liste de morceaux dont on garde le texte)."""
+    """Le texte d'un message OpenAI (chaîne, ou liste de morceaux dont on garde le texte).
+    Une pièce jointe (image, son, fichier) ne peut pas être transmise à Gemini : elle est
+    signalée, pour qu'il ne réponde pas comme s'il l'avait vue."""
     if isinstance(contenu, str):
         return contenu
     if isinstance(contenu, list):
-        return "\n".join(
-            m.get("text", "") for m in contenu if isinstance(m, dict) and m.get("type") in ("text", "input_text")
-        )
+        morceaux = []
+        for m in contenu:
+            if not isinstance(m, dict):
+                continue
+            if m.get("type") in ("text", "input_text"):
+                morceaux.append(m.get("text", ""))
+            elif m.get("type") in PIECES_JOINTES:
+                morceaux.append(f"[{PIECES_JOINTES[m['type']]} jointe, non transmise à Gemini]")
+        return "\n".join(morceaux)
     return "" if contenu is None else str(contenu)
+
+
+def resoudre_modele(demande: str | None, disponibles: list[str]) -> str | None:
+    """Le modèle de Gemini qu'un client désigne, souvent à sa façon (« gemini-3.1-pro »,
+    « 3.1-pro-preview », « argon ») ; None = celui déjà choisi dans Gemini (« agent-first »,
+    ou un nom inconnu comme « gpt-4o » : mieux vaut répondre que refuser)."""
+    if demande is None or demande.strip().lower() in MODELES_COURANTS:
+        return None
+    if demande in disponibles:
+        return demande
+
+    def norme(nom: str) -> str:
+        return re.sub(r"[^a-z0-9.]", "", nom.lower().replace("gemini", ""))
+
+    voulu = norme(demande)
+    if not voulu:
+        return None
+    normes = {nom: norme(nom) for nom in disponibles}
+    exacts = [nom for nom, n in normes.items() if n == voulu]
+    if exacts:
+        return exacts[0]
+    prefixes = [nom for nom, n in normes.items() if n and voulu.startswith(n)]  # « 3.1-pro-preview »
+    if prefixes:
+        return max(prefixes, key=lambda nom: len(normes[nom]))
+    contenant = [nom for nom, n in normes.items() if voulu in n]  # « argon » → « 4 Argon »
+    return contenant[0] if len(contenant) == 1 else None
 
 
 def empreinte(modele: str | None, messages: list[dict]) -> str:
@@ -56,7 +93,11 @@ def mettre_a_plat(messages: list[dict]) -> str:
             f"{'Assistant' if m.get('role') == 'assistant' else 'User'}: {texte_message(m.get('content'))}" for m in avant
         ]
         parties.append("[Conversation so far]\n" + "\n\n".join(lignes))
-    parties.append("[New message]\n" + texte_message(dernier.get("content")))
+    # Sans cette consigne, Gemini commente parfois la transcription ou répond « Assistant: … ».
+    parties.append(
+        "[New message — answer it directly, following the instructions above; no \"Assistant:\" prefix]\n"
+        + texte_message(dernier.get("content"))
+    )
     return "\n\n".join(parties)
 
 
@@ -69,24 +110,26 @@ def estimer_jetons(texte: str) -> int:
     return max(1, len(texte) // 4)
 
 
-def completion(contenu: str, modele: str, invite: str) -> dict:
+def completion(contenu: str, modele: str, invite: str, extras: dict | None = None) -> dict:
+    """`extras` s'ajoute au message (médias : `images`, `media`)."""
     entree, sortie = estimer_jetons(invite), estimer_jetons(contenu)
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
         "object": "chat.completion",
         "created": int(time.time()),
         "model": modele,
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": contenu}, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": contenu, **(extras or {})},
+                     "finish_reason": "stop"}],
         "usage": {"prompt_tokens": entree, "completion_tokens": sortie, "total_tokens": entree + sortie},
     }
 
 
-def morceaux(contenu: str, modele: str) -> Iterator[str]:
+def morceaux(contenu: str, modele: str, extras: dict | None = None) -> Iterator[str]:
     """La réponse en flux SSE au format OpenAI : Gemini web étant lu à la fin, un seul morceau."""
     base = {"id": f"chatcmpl-{uuid.uuid4().hex[:24]}", "object": "chat.completion.chunk",
             "created": int(time.time()), "model": modele}
     for choix in (
-        {"index": 0, "delta": {"role": "assistant", "content": contenu}, "finish_reason": None},
+        {"index": 0, "delta": {"role": "assistant", "content": contenu, **(extras or {})}, "finish_reason": None},
         {"index": 0, "delta": {}, "finish_reason": "stop"},
     ):
         yield f"data: {json.dumps({**base, 'choices': [choix]}, ensure_ascii=False)}\n\n"

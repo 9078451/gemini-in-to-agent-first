@@ -30,13 +30,40 @@ dédié était déjà ouvert avant la mise à jour, ferme-le une fois : Agent Fi
 relance avec les bons réglages.
 
 - **Nouvelle conversation**, choix du **modèle** et du **niveau de réflexion**
-  en haut de la discussion ; Entrée envoie, Maj+Entrée va à la ligne.
+  sous la zone de saisie ; Entrée envoie, Maj+Entrée va à la ligne.
+- **Créer** (sous la zone de saisie) : Texte, **Image**, **Vidéo** ou **Musique**
+  (voir plus bas). Une erreur propose **Réessayer** ; chaque bloc de code a son
+  bouton Copier.
 - **Accueil / Historique** : statistiques, recherche, reprise ou retrait d'une
   conversation (elle reste dans Gemini).
 - **Paramètres** : modèle et niveau par défaut, état de Chrome et de Google,
   adresse et clé de l'API réseau.
 
 L'historique est dans `donnees/historique.db` (sur ton PC, exclu de git).
+
+## Images, vidéos et musique
+
+Choisis **Créer → Image, Vidéo ou Musique**, puis décris ce que tu veux. Agent
+First coche l'outil de création de Gemini (menu « Outils » de la page, s'il le
+trouve), rédige la demande pour que Gemini crée vraiment le média (et ne se
+contente pas de le décrire), attend qu'il soit prêt, puis le télécharge avec ta
+session Google (en taille réelle pour une image, si possible).
+
+- Les médias s'affichent dans la discussion : une image s'agrandit d'un clic,
+  vidéos et sons ont leur lecteur, chacun a un bouton **Télécharger**.
+- Ils sont gardés dans `donnees/medias/<conversation>/` et reviennent quand tu
+  rouvres la conversation ; la retirer de l'historique retire ses médias.
+- Délais (`DELAI_MEDIA` dans `config.py`) : 4 min pour une image, 15 min pour une
+  vidéo, 10 min pour de la musique. Une vidéo Veo prend souvent plusieurs
+  minutes ; le Chat attend pendant ce temps (Cowork, lui, continue).
+- Si Gemini répond sans média (refus, outil indisponible avec ce modèle ou ce
+  compte), un avertissement le dit : reformule, ou change de modèle.
+- Dans une conversation qui a déjà un média, une nouvelle demande peut le
+  modifier (« même image, mais en hiver »).
+
+Si Google change sa page et qu'un média n'est plus repéré :
+`python -m pilote.inspecter --medias` montre ce qu'Agent First voit dans la
+dernière réponse ; les repères sont dans `pilote/selecteurs.py`.
 
 ## Mode Cowork
 
@@ -101,6 +128,53 @@ Renvoyer l'historique complet (comme le fait un client OpenAI) continue la même
 conversation Gemini. Ces appels passent par la fenêtre du Chat : ils répondent
 pendant une tâche Cowork, mais un à la fois (les suivants attendent leur tour).
 
+- `model` : un nom de `/v1/models`, ou à la façon des clients (« gemini-3.1-pro »,
+  « 3.1-pro-preview », « argon ») ; un nom inconnu (« gpt-4o ») ou
+  « agent-first » garde le modèle déjà choisi dans Gemini.
+- `reasoning_effort` : `none`/`minimal`/`low` → Min., `medium` → Moyen,
+  `high`/`xhigh` → Max.
+- `stream: true` : un commentaire `: ping` part toutes les 10 s pendant que
+  Gemini réfléchit (les clients n'abandonnent plus), puis la réponse ; une
+  erreur arrive au format OpenAI (`data: {"error": …}`).
+- Une demande qui n'a pas pu commencer à temps est retirée de la file : elle ne
+  part pas vers Gemini plus tard. Une réponse arrivée après le délai est quand
+  même gardée dans l'historique.
+- Une image jointe à un message n'est pas transmise à Gemini (il en est averti).
+
+**Images** (format OpenAI) :
+
+```python
+reponse = client.images.generate(prompt="un renard roux dans la neige", size="1792x1024")
+print(reponse.data[0].url)          # lien signé : s'ouvre sans la clé (navigateur, <img>)
+# response_format="b64_json" donne l'image elle-même ; n=2 demande deux versions
+```
+
+Dans `/v1/chat/completions`, `"modalities": ["image", "text"]` (comme OpenRouter)
+ou `"media": "image" | "video" | "music"` fait créer le média : la réponse le
+donne dans `message.media` (liens signés), `message.images` (images en
+`data:`, format OpenRouter) et sous forme de liens dans le texte.
+
+**Vidéos et musique** :
+
+```
+curl -H "Authorization: Bearer <clé>" -H "Content-Type: application/json" ^
+     -d "{\"type\": \"video\", \"prompt\": \"une vague au ralenti\", \"wait\": false}" ^
+     http://192.168.1.10:8766/v1/media/generations
+```
+
+| Route | Rôle |
+|---|---|
+| `POST /v1/images/generations` `{prompt, n?, size?, response_format?, model?}` | image(s), format OpenAI |
+| `POST /v1/media/generations` `{type, prompt, n?, size?, response_format?, model?, wait?}` | image, vidéo ou musique ; `wait: false` → 202 tout de suite |
+| `GET /v1/media/generations/{id}` | état (`in_progress`, `completed`, `failed`) et médias |
+| `GET /v1/media/{conversation}/{fichier}` | le fichier (`?sig=` d'un lien signé, ou la clé ; `?download=true`) |
+| `GET /v1/conversations/{id}` | une conversation de l'historique et ses médias |
+| `GET /health` | Agent First répond (sans clé) |
+
+Un lien signé ne donne accès qu'à son média ; régénérer la clé les invalide tous.
+L'API accepte les appels de pages web d'autres appareils (CORS) : la clé reste
+exigée.
+
 **Tâches Cowork** :
 
 ```
@@ -122,7 +196,7 @@ Sans `reasoning_effort`, une tâche Cowork utilise le niveau par défaut de l'ap
 (Min.) : avec « Max. », Gemini peut abandonner une longue demande sans répondre.
 
 Les conversations de l'API apparaissent dans l'historique de l'app (marquées
-« api »), et une demande d'accord s'y signale aussi. Désactiver l'API :
+« api »), médias compris, et une demande d'accord s'y signale aussi. Désactiver l'API :
 `API_ACTIVE = False` dans `config.py`. **Quiconque a la clé peut faire agir
 Cowork sur ton PC** : garde-la pour toi et régénère-la au moindre doute.
 
@@ -133,7 +207,12 @@ Cowork sur ton PC** : garde-la pour toi et régénère-la au moindre doute.
 node --test tests/web/outils.test.mjs tests/web/outils_cowork.test.mjs  tests JavaScript
 .venv\Scripts\python -m pilote.modes                                    modèles et niveaux de Gemini
 .venv\Scripts\python -m pilote.essai "Bonjour"                          essai direct du pilote
+.venv\Scripts\python -m pilote.essai "Un chat roux" --outil image       essai d'une création (médias dans journaux\)
 .venv\Scripts\python -m pilote.inspecter                                repères de la page Gemini
+.venv\Scripts\python -m pilote.inspecter --medias                       médias de la dernière réponse
 ```
+
+`tests/test_pilote_page.py` lance le pilote face à une fausse page Gemini, dans
+le Chrome de `CHEMIN_CHROME` (sans fenêtre) ; il est passé si aucun Chrome ne démarre.
 
 Conception : `docs/superpowers/specs/` · Plans : `docs/superpowers/plans/`

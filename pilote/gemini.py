@@ -8,10 +8,12 @@ from pathlib import Path
 from playwright.sync_api import Error as ErreurPlaywright
 from playwright.sync_api import Locator, Page
 
-from pilote import modes
+from pilote import medias, modes, outils
 from pilote.attente import attendre_envoi, attendre_fin_reponse, attendre_nouvelle_reponse
 from pilote.chrome import OngletGemini
-from pilote.erreurs import DelaiDepasse, ErreurPilote, PasConnecteGoogle, RepereIntrouvable, VerificationGoogle
+from pilote.erreurs import (
+    DelaiDepasse, ErreurPilote, PageInstable, PasConnecteGoogle, RepereIntrouvable, VerificationGoogle,
+)
 from pilote.modeles import Modes, ResultatGemini
 from pilote.reperes import attendre_repere, compter, premier_present
 from pilote.selecteurs import BLOC_CODE, CONTENU_REPONSE, DECOR_REPONSE, ENTETE_CODE
@@ -21,6 +23,9 @@ journal = logging.getLogger(__name__)
 # s : délai pour que la question apparaisse dans la conversation après le clic sur Envoyer.
 # Large : quand le compte atteint sa limite, Gemini peut accepter le message en retard.
 DELAI_ENVOI = 60.0
+# s : après une réponse finie en apparence, attente d'un média encore en préparation ou
+# demandé mais absent (une vidéo Veo arrive des minutes après « Je crée ta vidéo… »).
+PATIENCE_MEDIAS = {None: 8.0, "image": 60.0, "video": 420.0, "musique": 240.0}
 
 EXTRAIRE_HTML = """(element, s) => {
   const copie = (element.querySelector(s.contenu) || element).cloneNode(true);
@@ -111,6 +116,10 @@ class PiloteGemini:
         # Version des réglages du compte quand la page a été chargée en discussion neuve
         # (elle les affichait alors), ou None.
         self._chargee_a: int | None = None
+        self._message_parti = False  # le message en cours a été envoyé (pas de nouvel essai)
+        # Un outil (image, vidéo…) a été coché : il resterait coché pour le message suivant,
+        # la page est rechargée avant.
+        self._outil_coche = False
 
     def envoyer(
         self,
@@ -119,15 +128,27 @@ class PiloteGemini:
         modele: str | None = None,
         niveau: str | None = None,
         delai: float | None = None,
+        outil: str | None = None,
     ) -> ResultatGemini:
         """Envoie `texte` dans la conversation `adresse` (None = nouvelle conversation),
         après avoir réglé le modèle et le niveau demandés. `delai` remplace, pour ce
-        message, la limite de temps de réponse par défaut."""
-        page = self._page()
-        try:
-            return self._envoyer(page, adresse, texte, modele, niveau, delai or self._delai_reponse)
-        except RepereIntrouvable as e:
-            raise RepereIntrouvable(e.nom, self._capturer(page)) from e
+        message, la limite de temps de réponse par défaut. `outil` (« image », « video »,
+        « musique ») coche l'outil de création de Gemini et attend le média."""
+        for essai in (1, 2):
+            page, self._message_parti = None, False
+            try:
+                page = self._page()
+                return self._envoyer(page, adresse, texte, modele, niveau, delai or self._delai_reponse, outil)
+            except RepereIntrouvable as e:
+                raise RepereIntrouvable(e.nom, self._capturer(page) if page else None) from e
+            except ErreurPlaywright as e:
+                # Onglet fermé ou rechargé, Chrome relancé… Avant l'envoi, un second essai suffit ;
+                # après, le message est peut-être parti : le renvoyer en ferait un doublon.
+                self._connus = False
+                if self._message_parti or essai == 2:
+                    raise PageInstable(str(e).splitlines()[0]) from e
+                journal.warning("Page Gemini instable avant l'envoi, nouvel essai : %s", e)
+        raise AssertionError("inatteignable")
 
     def preparer(self) -> None:
         """Ouvre Chrome et une nouvelle discussion Gemini, prête à recevoir un message
@@ -147,15 +168,18 @@ class PiloteGemini:
         return self._lire_reglages(page)
 
     def _envoyer(
-        self, page: Page, adresse: str | None, texte: str, modele: str | None, niveau: str | None, delai: float
+        self, page: Page, adresse: str | None, texte: str, modele: str | None, niveau: str | None, delai: float,
+        outil: str | None = None,
     ) -> ResultatGemini:
+        recharger = self._outil_coche
         if adresse is None:
-            if not nouvelle_discussion_prete(page.url, self._url_nouvelle, compter(page, "question")):
+            if recharger or not nouvelle_discussion_prete(page.url, self._url_nouvelle, compter(page, "question")):
                 self._discussion_neuve(page)
-        elif page.url != adresse:
+        elif recharger or page.url != adresse:
             page.goto(adresse, wait_until="domcontentloaded")
             self._conversation_rouverte()
             self._attendre_historique(page)
+        self._outil_coche = False  # rechargée : plus d'outil coché (gardé si le rechargement a échoué)
 
         try:
             champ = attendre_repere(page, "champ_saisie", 15)
@@ -164,6 +188,10 @@ class PiloteGemini:
             raise
         self._verifier_acces(page)
         self._ajuster(page, modele, niveau)
+        if outil is not None:
+            self._outil_coche = True
+            if not outils.choisir_outil(page, outil):
+                journal.info("Outil « %s » introuvable dans Gemini : la demande part sans lui", outil)
 
         nb_avant = compter(page, "reponse")
         questions_avant = compter(page, "question")
@@ -174,6 +202,7 @@ class PiloteGemini:
         # n'envoient pas le message en morceaux.
         page.keyboard.insert_text(texte)
         attendre_repere(page, "bouton_envoyer", 5).first.click()
+        self._message_parti = True
         try:
             attendre_envoi(
                 lambda: compter(page, "question"), questions_avant, DELAI_ENVOI, lambda: self._bandeau_limite(page)
@@ -197,16 +226,23 @@ class PiloteGemini:
                 generation_en_cours=lambda: self._generation_en_cours(page),
                 delai_max=max(0.0, fin - time.monotonic()),
                 stabilite=self._stabilite,
+                lire_medias=lambda: medias.etat_medias(nouvelle),
+                media_attendu=outil is not None,
+                patience_medias=PATIENCE_MEDIAS.get(outil, PATIENCE_MEDIAS[None]),
             )
         except DelaiDepasse as e:
             raise DelaiDepasse(delai, e.partiel) from e  # le message cite la limite entière, pas le reste
+        duree = round(time.monotonic() - debut, 1)
+        trouves, perdus = medias.telecharger_medias(page, nouvelle)
         return ResultatGemini(
             reponse=reponse.strip(),
             adresse=page.url,
             html=self._html(nouvelle),
             modele=self._modele,
             niveau=self._niveau,
-            duree=round(time.monotonic() - debut, 1),
+            duree=duree,
+            medias=tuple(trouves),
+            medias_perdus=perdus,
         )
 
     def _page(self) -> Page:

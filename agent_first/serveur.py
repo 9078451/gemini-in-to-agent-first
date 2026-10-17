@@ -1,4 +1,5 @@
 """API HTTP locale d'Agent First (n'écoute que sur 127.0.0.1)."""
+import json
 import logging
 from concurrent.futures import TimeoutError as DelaiFutur
 from dataclasses import asdict
@@ -15,16 +16,20 @@ from pydantic import BaseModel, field_validator
 from agent_first.cache_modes import CacheModes
 from agent_first.cle_api import GardeCle
 from agent_first.cowork_service import TacheEnCours
+from agent_first.creation import requete_creation
 from agent_first.diffuseur import Diffuseur
-from agent_first.file_attente import FileAttente
+from agent_first.file_attente import FileAttente, attendre
 from agent_first.historique import ConversationInconnue, Historique
+from agent_first.mediatheque import Mediatheque, mime_de
 from agent_first.nettoyage import nettoyer_html
+from agent_first.reponses import garder_reponse
 from pilote.erreurs import ChoixBloque, ErreurPilote, ModeleIntrouvable, NiveauIntrouvable
 from pilote.modeles import Modes, ResultatGemini
 
 journal = logging.getLogger(__name__)
 
 Periode = Literal["7j", "30j", "tout"]
+Outil = Literal["image", "video", "musique"]
 INCONNUE = "Conversation inconnue : démarre une nouvelle conversation."
 EN_COURS = "Une tâche tourne déjà dans cette conversation : attends sa fin ou arrête-la."
 
@@ -40,6 +45,7 @@ class NouveauMessage(BaseModel):
     texte: str
     modele: str | None = None
     niveau: str | None = None
+    outil: Outil | None = None  # créer une image, une vidéo, de la musique
 
     @field_validator("texte")
     @classmethod
@@ -70,6 +76,20 @@ def erreur(code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=code, content={"erreur": message})
 
 
+def reponse_media(chemin: Path, telecharger: bool = False) -> FileResponse:
+    """Un média de la médiathèque. Jamais exécuté comme une page (bac à sable) : il est
+    servi depuis l'origine de l'app, qui connaît la clé de l'API."""
+    return FileResponse(
+        chemin, media_type=mime_de(chemin), filename=f"agent-first-{chemin.name}",
+        content_disposition_type="attachment" if telecharger else "inline",
+        headers={
+            "Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self'; media-src 'self'",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, max-age=31536000, immutable",  # un fichier ne change jamais
+        },
+    )
+
+
 def creer_app(
     file_chat: FileAttente,
     historique: Historique,
@@ -84,10 +104,16 @@ def creer_app(
     garde_api: GardeCle | None = None,
     adresse_api: str | None = None,
     hotes_autorises: list[str] | None = None,
+    mediatheque: Mediatheque | None = None,
+    delais_media: dict[str, float] | None = None,
+    attente_file: float = 110.0,
 ) -> FastAPI:
     """`file_chat` : la file de l'onglet du Chat (messages du Chat, état de Google, modèles) ;
-    les tâches Cowork passent par celle du service `cowork`."""
+    les tâches Cowork passent par celle du service `cowork`. `delais_media` : limite de la
+    réponse de Gemini par outil de création ; `attente_file` s'y ajoute (attente de son tour)."""
     app = FastAPI(title="Agent First")
+    delais_media = delais_media or {}
+    google_connu: list[bool | None] = [None]  # dernier état lu du compte Google
     if hotes_autorises:
         # Une page web ne doit pas pouvoir joindre l'app par « reliure DNS » (et lire la clé de l'API).
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=hotes_autorises)
@@ -100,13 +126,16 @@ def creer_app(
     @app.get("/api/etat")
     def etat():
         lance = chrome_lance()
-        google = None
-        if lance:
+        if not lance:
+            google_connu[0] = None
+        elif not file_chat.occupee():
+            # Onglet du Chat occupé (une vidéo peut prendre des minutes) : le dernier état lu sert,
+            # sans mettre une vérification en file derrière la demande en cours.
             try:
-                google = file_chat.soumettre(lambda pilote: pilote.est_connecte()).result(timeout=5)
+                google_connu[0] = attendre(file_chat.soumettre(lambda pilote: pilote.est_connecte()), 5)
             except Exception:
-                google = None  # occupé ou injoignable : inconnu
-        return {"agent_first": True, "chrome": lance, "google": google}
+                google_connu[0] = None  # injoignable : inconnu
+        return {"agent_first": True, "chrome": lance, "google": google_connu[0] if lance else None}
 
     @app.get("/api/modeles")
     def modeles():
@@ -205,20 +234,45 @@ def creer_app(
             return erreur(404, INCONNUE)
         if cowork is not None:
             cowork.oublier(identifiant)
+        if mediatheque is not None:
+            mediatheque.supprimer(identifiant)
         return {"supprimee": True}
+
+    @app.get("/api/medias/{conversation}/{fichier}")
+    def media(conversation: str, fichier: str, telecharger: bool = False):
+        chemin = mediatheque.chemin(f"{conversation}/{fichier}") if mediatheque else None
+        if chemin is None:
+            return erreur(404, "Média introuvable (retiré avec sa conversation ?).")
+        return reponse_media(chemin, telecharger)
 
     @app.post("/api/conversations/{identifiant}/messages")
     def envoyer(identifiant: str, demande: NouveauMessage):
+        outil = demande.outil
         try:
             adresse = historique.conversation(identifiant).adresse
-            historique.ajouter_message(identifiant, "toi", demande.texte, modele=demande.modele, niveau=demande.niveau)
+            historique.ajouter_message(
+                identifiant, "toi", demande.texte, modele=demande.modele, niveau=demande.niveau,
+                details=json.dumps({"outil": outil}) if outil else None,
+            )
         except ConversationInconnue:
             return erreur(404, INCONNUE)
-        futur = file_chat.soumettre(lambda pilote: pilote.envoyer(adresse, demande.texte, demande.modele, demande.niveau))
+        texte, options, limite = demande.texte, {}, delai
+        if outil:  # rédigée pour que Gemini crée le média ; plus de temps qu'une réponse écrite
+            texte = requete_creation(outil, demande.texte, suite=adresse is not None)
+            options = {"outil": outil, "delai": delais_media.get(outil)}
+            limite = (delais_media[outil] + attente_file) if outil in delais_media else delai
+
+        def travail(pilote):
+            # Gardée dans la file, juste après la réponse : arrivée après le délai, elle est quand
+            # même dans l'historique quand on rouvre la conversation.
+            resultat = pilote.envoyer(adresse, texte, demande.modele, demande.niveau, **options)
+            return resultat, enregistrer_reponse(identifiant, resultat)
+
+        futur = file_chat.soumettre(travail)
         try:
-            resultat = futur.result(timeout=delai)
+            resultat, message = attendre(futur, limite)
         except DelaiFutur:
-            return echec(identifiant, 504, f"Pas de réponse de Gemini après {delai:.0f} s.")
+            return echec(identifiant, 504, f"Pas de réponse de Gemini après {limite:.0f} s.")
         except (ModeleIntrouvable, NiveauIntrouvable, ChoixBloque) as e:
             modes.oublier()  # la liste a changé : relue à la prochaine demande
             return echec(identifiant, 502, str(e))
@@ -227,7 +281,7 @@ def creer_app(
         except Exception as e:
             journal.exception("Erreur inattendue pendant l'envoi")
             return echec(identifiant, 500, f"Erreur inattendue : {e}")
-        return {"message": enregistrer_reponse(identifiant, resultat)}
+        return {"message": message, "medias_perdus": resultat.medias_perdus}
 
     @app.get("/api/statistiques")
     def statistiques(periode: Periode = "7j"):
@@ -235,18 +289,12 @@ def creer_app(
 
     def enregistrer_reponse(identifiant: str, resultat: ResultatGemini) -> dict:
         html = nettoyer_html(resultat.html) if resultat.html else None
-        try:
-            historique.enregistrer_adresse(identifiant, resultat.adresse)
-            message = historique.ajouter_message(
-                identifiant, "gemini", resultat.reponse, html=html,
-                modele=resultat.modele, niveau=resultat.niveau, duree=resultat.duree,
-            )
-        except ConversationInconnue:
-            journal.info("Conversation %s supprimée pendant l'envoi : réponse non enregistrée", identifiant)
+        message, _ = garder_reponse(historique, mediatheque, identifiant, resultat, html)
+        if message is None:  # conversation retirée pendant l'envoi : la réponse s'affiche quand même
             return {
                 "id": None, "conversation_id": identifiant, "role": "gemini", "texte": resultat.reponse,
                 "html": html, "modele": resultat.modele, "niveau": resultat.niveau,
-                "duree": resultat.duree, "cree_le": None,
+                "duree": resultat.duree, "cree_le": None, "medias": [],
             }
         return asdict(message)
 

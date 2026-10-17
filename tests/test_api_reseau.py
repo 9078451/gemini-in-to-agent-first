@@ -88,7 +88,8 @@ def test_docs_sans_cle(monte):
 def test_models(monte):
     client, *_ = monte()
     donnees = client.get("/v1/models").json()
-    assert donnees["object"] == "list" and [m["id"] for m in donnees["data"]] == ["4 Argon", "3.1 Pro"]
+    # « agent-first » à la fin : le modèle déjà choisi dans Gemini, pour les clients qui exigent un nom de la liste
+    assert donnees["object"] == "list" and [m["id"] for m in donnees["data"]] == ["4 Argon", "3.1 Pro", "agent-first"]
 
 
 def test_models_sans_attendre_une_longue_tache(monte, tmp_path):
@@ -111,12 +112,12 @@ def test_models_sans_attendre_une_longue_tache(monte, tmp_path):
     debut = time.monotonic()
     try:
         ids = [m["id"] for m in client.get("/v1/models").json()["data"]]
-        assert time.monotonic() - debut < 2 and ids == ["4 Argon", "3.1 Pro"]
+        assert time.monotonic() - debut < 2 and ids == ["4 Argon", "3.1 Pro", "agent-first"]
     finally:
         libere.set()
         evenements_sse(client.get(f"/v1/cowork/{identifiant}/events"))
     assert lectures == []
-    assert [m["id"] for m in client.get("/v1/models").json()["data"]] == ["5 Ultra"]
+    assert [m["id"] for m in client.get("/v1/models").json()["data"]] == ["5 Ultra", "agent-first"]
 
 
 def test_chat_completion(monte):

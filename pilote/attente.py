@@ -74,26 +74,42 @@ def attendre_fin_reponse(
     horloge: Callable[[], float] = time.monotonic,
     dormir: Callable[[float], None] = time.sleep,
     stabilite_apres_generation: float = 0.6,
+    lire_medias: Callable[[], tuple[int, bool]] = lambda: (0, False),
+    media_attendu: bool = False,
+    patience_medias: float = 20.0,
 ) -> str:
-    """Renvoie le texte quand la génération est finie et que le texte n'a plus bougé
-    pendant `stabilite` secondes — ou seulement `stabilite_apres_generation` si on a vu
-    Gemini générer puis s'arrêter : ce signal est sûr, inutile d'attendre 2 s à chaque
-    réponse. Lève DelaiDepasse après `delai_max`."""
+    """Renvoie le texte quand la génération est finie et que la réponse (texte et médias) n'a
+    plus bougé pendant `stabilite` secondes — ou seulement `stabilite_apres_generation` si on
+    a vu Gemini générer puis s'arrêter : ce signal est sûr, inutile d'attendre 2 s à chaque
+    réponse. Lève DelaiDepasse après `delai_max`.
+
+    `lire_medias` donne le nombre de médias (images, vidéos, sons) de la réponse et s'il en
+    reste un en préparation. Une réponse faite d'une seule image (sans texte) est finie. Un
+    média en préparation, ou attendu (`media_attendu`) mais pas encore là, fait patienter
+    jusqu'à `patience_medias` secondes de plus : une vidéo arrive bien après le texte
+    « Je crée ta vidéo… »."""
     debut = horloge()
     dernier_texte = lire_texte()
+    dernier_nombre = lire_medias()[0]
     dernier_changement = debut
     vu_generer = False
+    calme_depuis = None  # réponse finie en apparence, mais un média se fait attendre
     while True:
         maintenant = horloge()
         if maintenant - debut > delai_max:
             raise DelaiDepasse(delai_max, dernier_texte.strip())
         texte = lire_texte()
+        nombre, en_preparation = lire_medias()
         en_cours = generation_en_cours()
         vu_generer = vu_generer or en_cours
         attente = stabilite_apres_generation if vu_generer else stabilite
-        if texte != dernier_texte:
-            dernier_texte = texte
-            dernier_changement = maintenant
-        elif texte.strip() and not en_cours and maintenant - dernier_changement >= attente:
-            return texte
+        if texte != dernier_texte or nombre != dernier_nombre:
+            dernier_texte, dernier_nombre = texte, nombre
+            dernier_changement, calme_depuis = maintenant, None
+        elif (texte.strip() or nombre) and not en_cours and maintenant - dernier_changement >= attente:
+            if not (en_preparation or (media_attendu and nombre == 0)):
+                return texte
+            calme_depuis = calme_depuis if calme_depuis is not None else maintenant
+            if maintenant - calme_depuis >= patience_medias:
+                return texte
         dormir(intervalle)

@@ -1,6 +1,9 @@
 // agent.first — état, affichage et événements de l'app.
 import { appeler } from "./api.js";
-import { cheminCourt, choixDisponible, formaterDate, formaterDuree, groupesParDate, limiteOption, metaMessage, titreDepuis } from "./outils.js";
+import {
+  OUTILS, avertissementMedia, cheminCourt, choixDisponible, formaterDate, formaterDuree, groupesParDate, limiteOption,
+  metaMessage, outilDuMessage, tailleFichier, texteAttente, titreDepuis,
+} from "./outils.js";
 import { avancementPlan, detailTour, infoResultat, libelleEtape, lignesBilan, nombreLignes, normaliserAction, resumeDiff } from "./outils_cowork.js";
 
 const $ = (id) => document.getElementById(id);
@@ -12,6 +15,13 @@ const VERT = "var(--vert)";
 const ORANGE = "var(--ambre)";
 const ROUGE = "var(--rouge)";
 const GRIS = "var(--texte-3)";
+// Exemples proposés dans une conversation vide : [texte, outil].
+const SUGGESTIONS = [
+  ["Explique-moi simplement comment fonctionne un moteur électrique", null],
+  ["Un renard roux dans une forêt enneigée, lumière douce du matin", "image"],
+  ["Une vague qui se brise au ralenti au coucher du soleil", "video"],
+  ["Un morceau lo-fi calme pour travailler, avec du piano et une pluie légère", "musique"],
+];
 const ETATS_GOOGLE = {
   true: ["connecté", VERT],
   false: ["non connecté", ROUGE],
@@ -22,6 +32,7 @@ const etat = {
   modes: { modeles: [], niveaux: [] },
   modele: null,
   niveau: null,
+  outil: null, // « image », « video », « musique » : Gemini crée ce média (Chat seulement)
   courante: null, // identifiant de la conversation affichée ; null = nouvelle conversation
   occupe: false,
   periode: "7j",
@@ -154,8 +165,39 @@ function dessinerReglages() {
   $("bouton-niveau").parentElement.hidden = !etat.modes.niveaux.length;
 }
 
+// Menu « Créer » : une réponse écrite, ou une image, une vidéo, de la musique.
+function dessinerOutil() {
+  const choisi = OUTILS[etat.outil] ?? null;
+  $("nom-outil").textContent = choisi?.nom ?? "Texte";
+  $("icone-outil").firstElementChild.setAttribute("href", `#${choisi?.icone ?? "i-texte"}`);
+  $("bouton-outil").classList.toggle("actif", Boolean(choisi));
+  const descriptions = { null: "Réponse écrite", image: "Gemini crée une image", video: "Veo : souvent plusieurs minutes", musique: "Un morceau audio" };
+  const options = [[null, { nom: "Texte", icone: "i-texte" }], ...Object.entries(OUTILS)].map(([cle, o]) => {
+    const option = element("button", "option option-outil");
+    option.type = "button";
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", String(cle === etat.outil));
+    const textes = element("span", "option-textes");
+    textes.append(element("span", "option-nom", o.nom), element("span", "option-desc", descriptions[cle]));
+    option.append(icone(o.icone), textes);
+    option.addEventListener("click", () => {
+      etat.outil = cle;
+      fermerMenus();
+      dessinerOutil();
+      $("saisie").focus();
+    });
+    return option;
+  });
+  $("menu-outils").replaceChildren(...options);
+  $("zone-outil").hidden = etat.mode === "cowork";
+  $("saisie").placeholder = etat.mode === "cowork" ? "Décris une tâche à Cowork…" : choisi?.saisie ?? "Demande à Gemini…";
+  $("pied").textContent = choisi
+    ? `${choisi.nom} : Gemini crée le média, gardé dans l'historique et téléchargeable · Entrée pour envoyer`
+    : "Entrée pour envoyer · Maj+Entrée pour aller à la ligne";
+}
+
 // bouton → menu qu'il ouvre, au-dessus de la zone de saisie
-const MENUS = { "bouton-modele": "menu-modeles", "bouton-niveau": "menu-niveaux" };
+const MENUS = { "bouton-outil": "menu-outils", "bouton-modele": "menu-modeles", "bouton-niveau": "menu-niveaux" };
 
 function basculerMenu(bouton) {
   const ouvrir = $(MENUS[bouton]).hidden;
@@ -215,20 +257,42 @@ function basculerBarre() {
 
 // ---------- discussion ----------
 
-function bulle(message) {
+function bulle(message, reessayer = null) {
   if (message.role === "toi") {
     const b = element("div", "bulle toi");
-    b.append(element("div", "texte-toi", message.texte));
+    const outil = OUTILS[outilDuMessage(message)];
+    const texte = element("div", "texte-toi");
+    if (outil) {
+      const etiquette = element("span", "etiquette-outil");
+      etiquette.append(icone(outil.icone), document.createTextNode(outil.nom));
+      texte.append(etiquette);
+    }
+    texte.append(document.createTextNode(message.texte));
+    b.append(texte);
     return b;
   }
   if (message.role === "erreur") {
-    return element("div", "bulle erreur", `Erreur : ${message.texte}`);
+    const b = element("div", "bulle erreur");
+    b.append(element("span", null, `Erreur : ${message.texte}`));
+    if (reessayer) {
+      const bouton = element("button", "bouton-reessayer");
+      bouton.type = "button";
+      bouton.append(icone("i-reessayer"), document.createTextNode("Réessayer"));
+      bouton.addEventListener("click", () => {
+        if (etat.occupe) return;
+        bouton.remove(); // une seule nouvelle tentative par erreur
+        reessayer();
+      });
+      b.append(bouton);
+    }
+    return b;
   }
-  // Réponse de Gemini : du texte, sans carte ; le modèle et la durée en dessous, en petit.
+  // Réponse de Gemini : du texte, sans carte ; ses médias ; le modèle et la durée en dessous, en petit.
   const carte = element("article", "bulle gemini");
   const contenu = element("div", "markdown");
   if (message.html) {
     contenu.innerHTML = message.html; // déjà nettoyé par Agent First (nh3)
+    contenu.querySelectorAll("pre").forEach(ajouterCopieCode);
   } else {
     contenu.textContent = message.texte;
   }
@@ -247,8 +311,78 @@ function bulle(message) {
   });
   const pied = element("div", "message-pied");
   pied.append(element("span", null, metaMessage(message)), copier);
-  carte.append(contenu, pied);
+  if (message.texte || message.html || !message.medias?.length) carte.append(contenu);
+  if (message.medias?.length) carte.append(blocMedias(message.medias));
+  carte.append(pied);
   return carte;
+}
+
+const NOMS_MEDIAS = { image: "Image", video: "Vidéo", audio: "Audio" };
+
+// Images (cliquer pour agrandir), vidéos et sons créés par Gemini, chacun téléchargeable.
+function blocMedias(medias) {
+  const bloc = element("div", "medias");
+  const images = element("div", "medias-images");
+  for (const m of medias) {
+    const url = `/api/medias/${m.id}`;
+    const carte = element("figure", `media media-${m.type}`);
+    if (m.type === "image") {
+      const agrandir = element("button", "media-agrandir");
+      agrandir.type = "button";
+      agrandir.title = "Agrandir";
+      const image = element("img");
+      image.src = url;
+      image.alt = m.description || "Image créée par Gemini";
+      image.loading = "lazy";
+      agrandir.append(image);
+      agrandir.addEventListener("click", () => ouvrirVisionneuse(m));
+      carte.append(agrandir);
+    } else {
+      const lecteur = element(m.type === "video" ? "video" : "audio");
+      lecteur.controls = true;
+      lecteur.preload = "metadata";
+      lecteur.src = url;
+      carte.append(lecteur);
+    }
+    const legende = element("figcaption", "media-legende");
+    const telecharger = element("a", "bouton-lien");
+    telecharger.href = `${url}?telecharger=true`;
+    telecharger.download = "";
+    telecharger.append(icone("i-telecharger"), document.createTextNode("Télécharger"));
+    const format = (m.mime.split("/")[1] ?? "").replace(/^x-/, "").toUpperCase();
+    legende.append(element("span", null, [NOMS_MEDIAS[m.type] ?? "Média", format, tailleFichier(m.octets)].filter(Boolean).join(" · ")), telecharger);
+    carte.append(legende);
+    (m.type === "image" ? images : bloc).append(carte);
+  }
+  if (images.childElementCount) bloc.prepend(images);
+  return bloc;
+}
+
+function ouvrirVisionneuse(m) {
+  const url = `/api/medias/${m.id}`;
+  $("visionneuse-image").src = url;
+  $("visionneuse-image").alt = m.description || "Image créée par Gemini";
+  $("visionneuse-legende").textContent = m.description || "";
+  $("visionneuse-ouvrir").href = url;
+  $("visionneuse-telecharger").href = `${url}?telecharger=true`;
+  $("visionneuse").showModal();
+}
+
+function ajouterCopieCode(pre) {
+  const bouton = element("button", "copier-code");
+  bouton.type = "button";
+  bouton.title = "Copier le code";
+  bouton.setAttribute("aria-label", "Copier le code");
+  bouton.append(icone("i-copier"));
+  bouton.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText((pre.querySelector("code") ?? pre).innerText);
+      signaler("Code copié", VERT);
+    } catch {
+      signaler("Copie impossible", ROUGE);
+    }
+  });
+  pre.append(bouton);
 }
 
 function accueilDiscussion() {
@@ -274,13 +408,29 @@ function accueilDiscussion() {
   }
   bloc.append(
     element("h1", null, "Discute avec Gemini"),
-    element("p", null, "Choisis le modèle et le niveau de réflexion sous la zone de saisie, puis pose ta question."),
+    element("p", null, "Pose ta question, ou choisis « Créer » sous la zone de saisie pour une image, une vidéo ou de la musique."),
   );
+  const suggestions = element("div", "suggestions");
+  for (const [texte, outil] of SUGGESTIONS) {
+    const bouton = element("button", "suggestion");
+    bouton.type = "button";
+    bouton.append(icone(OUTILS[outil]?.icone ?? "i-messages"), element("span", null, texte));
+    bouton.addEventListener("click", () => {
+      etat.outil = outil;
+      dessinerOutil();
+      $("saisie").value = texte;
+      ajusterSaisie();
+      $("saisie").focus();
+    });
+    suggestions.append(bouton);
+  }
+  bloc.append(suggestions);
   return bloc;
 }
 
 function nouvelleConversation() {
   etat.courante = null;
+  etat.outil = null;
   if (etat.mode === "cowork") etat.dossier = lire(CLE_DOSSIER, null);
   $("titre-conversation").textContent = "Nouvelle conversation";
   const defaut = lire(CLE_DEFAUT, {});
@@ -301,6 +451,9 @@ async function ouvrirConversation(identifiant) {
     etat.dossier = conversation.dossier ?? null;
     $("titre-conversation").textContent = conversation.titre || "Conversation";
     choisirReglages(conversation.modele, conversation.niveau);
+    // on reprend là où on en était : le dernier outil demandé (une autre image…)
+    const demandes = messages.filter((m) => m.role === "toi");
+    etat.outil = etat.mode === "chat" && demandes.length ? outilDuMessage(demandes[demandes.length - 1]) : null;
     dessinerMode();
     const fil = $("fil");
     fil.replaceChildren();
@@ -324,10 +477,11 @@ async function ouvrirConversation(identifiant) {
   }
 }
 
-async function envoyer() {
-  const texte = $("saisie").value.trim();
+async function envoyer(texteImpose = null, outilImpose = undefined) {
+  const texte = (texteImpose ?? $("saisie").value).trim();
   if (!texte || etat.occupe) return;
   if (etat.mode === "cowork") return envoyerCowork(texte);
+  const outil = outilImpose === undefined ? etat.outil : outilImpose;
   etat.occupe = true;
   $("form-saisie").classList.add("occupe");
   $("saisie").value = "";
@@ -335,18 +489,18 @@ async function envoyer() {
 
   const fil = $("fil");
   fil.querySelector(".vide-discussion")?.remove();
-  fil.append(bulle({ role: "toi", texte }));
+  fil.append(bulle({ role: "toi", texte, details: outil ? JSON.stringify({ outil }) : null }));
   const attente = element("div", "bulle attente");
-  const libelle = element("span", null, "Gemini réfléchit…");
+  const libelle = element("span", null, texteAttente(outil));
   attente.append(element("span", "points"), libelle);
   fil.append(attente);
   defilerEnBas();
   if (!etat.courante) $("titre-conversation").textContent = titreDepuis(texte);
 
   const debut = Date.now();
-  signaler("Gemini réfléchit…", ORANGE);
+  signaler(texteAttente(outil), ORANGE);
   const minuteur = setInterval(() => {
-    const ecoule = `Gemini réfléchit… ${formaterDuree((Date.now() - debut) / 1000)}`;
+    const ecoule = `${texteAttente(outil)} ${formaterDuree((Date.now() - debut) / 1000)}`;
     libelle.textContent = ecoule;
     signaler(ecoule, ORANGE);
   }, 1000);
@@ -356,16 +510,19 @@ async function envoyer() {
       const conversation = await appeler("POST", "/api/conversations", { modele: etat.modele, niveau: etat.niveau });
       etat.courante = conversation.id;
     }
-    const { message } = await appeler("POST", `/api/conversations/${etat.courante}/messages`, {
+    const { message, medias_perdus: perdus } = await appeler("POST", `/api/conversations/${etat.courante}/messages`, {
       texte,
       modele: etat.modele,
       niveau: etat.niveau,
+      ...(outil ? { outil } : {}),
     });
     attente.replaceWith(bulle(message));
-    signaler("Gemini prêt", VERT);
+    const avertissement = avertissementMedia(outil, message.medias, perdus);
+    if (avertissement) fil.append(element("div", "bulle note", avertissement));
+    signaler(message.medias?.length ? `${message.medias.length} média${message.medias.length > 1 ? "s" : ""} reçu${message.medias.length > 1 ? "s" : ""}` : "Gemini prêt", VERT);
     verifierEtat(); // Chrome et Google viennent de servir : l'état affiché se met à jour
   } catch (e) {
-    attente.replaceWith(bulle({ role: "erreur", texte: e.message }));
+    attente.replaceWith(bulle({ role: "erreur", texte: e.message }, () => envoyer(texte, outil)));
     $("saisie").value = texte; // pour pouvoir le renvoyer
     ajusterSaisie();
     signaler(e.message === "Agent First n'est pas démarré." ? "Agent First arrêté" : "Erreur", ROUGE);
@@ -825,7 +982,7 @@ function dessinerMode() {
   $("choisir-dossier").hidden = etat.mode !== "cowork";
   $("nom-dossier").textContent = etat.dossier ? cheminCourt(etat.dossier) : "Choisir un dossier";
   $("choisir-dossier").title = etat.dossier ? `${etat.dossier} (cliquer pour changer)` : "Choisir le dossier de travail";
-  $("saisie").placeholder = etat.mode === "cowork" ? "Décris une tâche à Cowork…" : "Demande à Gemini…";
+  dessinerOutil();
 }
 
 function choisirMode(mode) {
@@ -884,6 +1041,7 @@ function dessinerCartes(s) {
     // Un nom de modèle est plus long qu'un nombre : écrit plus petit pour tenir dans la carte.
     ["Modèle favori", "le plus utilisé", s.modele_favori ?? "—", "texte"],
     ["Temps moyen", "par réponse", s.temps_moyen == null ? "—" : formaterDuree(s.temps_moyen)],
+    ["Médias créés", "images, vidéos, sons", String(s.medias ?? 0)],
   ];
   $("cartes").replaceChildren(
     ...cartes.map(([titre, sousTitre, valeur, style = ""]) => {
@@ -1053,6 +1211,10 @@ function brancherEvenements() {
   $("deplier").addEventListener("click", basculerBarre);
   $("bouton-modele").addEventListener("click", () => basculerMenu("bouton-modele"));
   $("bouton-niveau").addEventListener("click", () => basculerMenu("bouton-niveau"));
+  $("bouton-outil").addEventListener("click", () => basculerMenu("bouton-outil"));
+  $("visionneuse").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) $("visionneuse").close(); // clic à côté de l'image
+  });
   $("form-saisie").addEventListener("click", (e) => {
     if (e.target === e.currentTarget) $("saisie").focus(); // un clic dans le cadre vide vise le texte
   });

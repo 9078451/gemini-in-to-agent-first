@@ -99,7 +99,7 @@ def test_l_api_repond_pendant_une_tache_cowork(agent):
 def test_les_modeles_sont_lus_pendant_une_tache_cowork(agent):
     tache_cowork_en_cours(agent)
     ids = [m["id"] for m in agent.client_api.get("/v1/models").json()["data"]]
-    assert ids == ["modèle lu par chat"]
+    assert ids == ["modèle lu par chat", "agent-first"]
     assert agent.client.get("/api/modeles").json()["modeles"][0]["nom"] == "modèle lu par chat"
 
 

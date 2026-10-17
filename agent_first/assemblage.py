@@ -19,6 +19,7 @@ from agent_first.cowork_service import ServiceCowork
 from agent_first.diffuseur import Diffuseur
 from agent_first.file_attente import FileAttente, rechauffer
 from agent_first.historique import Historique
+from agent_first.mediatheque import Mediatheque
 from agent_first.serveur import creer_app
 from cowork.actions import Executeur
 from cowork.boucle import Reglages
@@ -49,9 +50,13 @@ def assembler(
     fichier_cle: Path | None,
     adresse_api: str | None = None,
     choisir_dossier: Callable[[], str | None] | None = None,
+    dossier_medias: Path | None = None,
 ) -> AgentFirst:
     """`fabrique_pilote(role)` fabrique le pilote d'un onglet ; elle est appelée dans le fil
-    de sa file. `fichier_cle` à None : pas d'API réseau."""
+    de sa file. `fichier_cle` à None : pas d'API réseau. `dossier_medias` : où garder les
+    images, vidéos et sons créés (par défaut, celui de `config`)."""
+    mediatheque = Mediatheque(dossier_medias or config.DOSSIER_MEDIAS)
+    medias = {"mediatheque": mediatheque, "delais_media": config.DELAI_MEDIA, "attente_file": config.ATTENTE_FILE}
     file_cowork = FileAttente(lambda: fabrique_pilote(ONGLET_COWORK), nom="file-gemini-cowork")
     file_chat = FileAttente(lambda: fabrique_pilote(ONGLET_CHAT), nom="file-gemini-chat")
     for file in (file_cowork, file_chat):
@@ -93,12 +98,12 @@ def assembler(
         garde = GardeCle(fichier_cle, essais_max=config.ESSAIS_CLE_MAX)
         api = creer_api_reseau(
             file_chat, historique, cowork, garde, cache_modes, config.DELAI_AGENT,
-            niveau_cowork=config.NIVEAU_ACTIF_PAR_DEFAUT,
+            niveau_cowork=config.NIVEAU_ACTIF_PAR_DEFAUT, **medias,
         )
     app = creer_app(
         file_chat, historique, config.DELAI_AGENT, chrome_lance, par_defaut,
         config.DOSSIER_WEB, cowork=cowork, choisir_dossier=choisir_dossier,
         diffuseur=diffuseur, cache_modes=cache_modes, garde_api=garde, adresse_api=adresse_api,
-        hotes_autorises=[config.HOTE_AGENT, "localhost"],
+        hotes_autorises=[config.HOTE_AGENT, "localhost"], **medias,
     )
     return AgentFirst(file_cowork, file_chat, cowork, app, api, garde)

@@ -84,3 +84,48 @@ export function choixDisponible(liste, nom) {
 export function cheminCourt(chemin) {
   return chemin.replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/i, "~");
 }
+
+// Ce que Gemini sait créer en plus du texte (menu « Créer » de la zone de saisie).
+export const OUTILS = {
+  image: { nom: "Image", icone: "i-image", attente: "Gemini crée l'image…", saisie: "Décris l'image à créer…", type: "image", article: "d'image" },
+  video: { nom: "Vidéo", icone: "i-video", attente: "Gemini crée la vidéo… (souvent plusieurs minutes)", saisie: "Décris la vidéo à créer…", type: "video", article: "de vidéo" },
+  musique: { nom: "Musique", icone: "i-musique", attente: "Gemini compose la musique…", saisie: "Décris la musique à créer…", type: "audio", article: "de musique" },
+};
+
+// Le texte d'attente pendant que Gemini travaille.
+export function texteAttente(outil) {
+  return OUTILS[outil]?.attente ?? "Gemini réfléchit…";
+}
+
+// L'outil d'un message de l'utilisateur (gardé dans ses détails), ou null.
+export function outilDuMessage(message) {
+  try {
+    return JSON.parse(message.details ?? "null")?.outil ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Un avertissement quand le média demandé n'est pas arrivé, ou null.
+export function avertissementMedia(outil, medias = [], perdus = 0) {
+  const recus = medias.filter((m) => m.type === OUTILS[outil]?.type).length;
+  if (perdus) return `Médias vus dans Gemini mais non récupérés : ${perdus} (détails dans journaux/agent_first.log).`;
+  if (outil && !recus) {
+    return `Gemini n'a pas renvoyé ${OUTILS[outil].article} : il a pu refuser la demande, ou ce modèle ne sait pas en créer. Reformule, ou choisis un autre modèle.`;
+  }
+  return null;
+}
+
+// « 1 234 567 » octets → « 1,2 Mo ».
+export function tailleFichier(octets) {
+  if (octets == null) return "";
+  if (octets < 1024) return `${octets} o`;
+  const unites = ["Ko", "Mo", "Go"];
+  let valeur = octets / 1024;
+  let i = 0;
+  while (valeur >= 1024 && i < unites.length - 1) {
+    valeur /= 1024;
+    i += 1;
+  }
+  return `${valeur.toLocaleString("fr-FR", { maximumFractionDigits: valeur < 10 ? 1 : 0 })} ${unites[i]}`;
+}

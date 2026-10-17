@@ -167,7 +167,7 @@ def test_suppression_pendant_envoi(pilote, tmp_path):
 def test_statistiques(client):
     envoyer(client, nouvelle(client), "Bonjour", modele="3.1 Pro")
     assert client.get("/api/statistiques", params={"periode": "7j"}).json() == {
-        "conversations": 1, "messages": 1, "modele_favori": "3.1 Pro", "temps_moyen": 1.5,
+        "conversations": 1, "messages": 1, "modele_favori": "3.1 Pro", "temps_moyen": 1.5, "medias": 0,
     }
 
 

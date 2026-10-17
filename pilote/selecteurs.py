@@ -39,6 +39,13 @@ REPERES: dict[str, list[str]] = {
         "button[aria-label*='sélecteur de mode']",
         "button[aria-label*='mode picker']",
     ],
+    # Menu « Outils » de la zone de saisie : créer des images, des vidéos (Veo), de la musique…
+    "bouton_outils": [
+        "button[aria-label='Outils']",
+        "button[aria-label*='Outils']",
+        "button[aria-label*='Tools']",
+        "toolbox-drawer button",
+    ],
 }
 
 # Sélecteur de mode : menu des modèles et sous-menu « Niveau de réflexion ».
@@ -53,3 +60,22 @@ CONTENU_REPONSE = ".markdown"
 BLOC_CODE = "code-block"
 ENTETE_CODE = ".code-block-decoration"
 DECOR_REPONSE = "button, gem-icon-button, gem-icon, mat-icon, gem-popover, .table-footer, .code-block-decoration"
+
+# Outils proposés par le menu « Outils » (le premier candidat qui trouve des éléments visibles).
+OPTIONS_OUTIL = [
+    "toolbox-drawer-item button",
+    "[role='menuitemcheckbox']",
+    "mat-action-list button",
+    "[role='menu'] [role='menuitem']",
+]
+
+# Médias d'une réponse : cherchés dans tout le bloc de la réponse (le texte est dans
+# message-content, une image ou une vidéo créée peut être à côté).
+CONTENEUR_REPONSE = "model-response"
+# Hors médias : avatar de Gemini, icônes, logos des sources citées, aperçus des liens.
+HORS_MEDIAS = "bard-avatar, gem-icon, mat-icon, button[aria-label*='source' i], sources-list, source-footnote, .source-chip"
+# Un média encore en préparation (image en cours de création, vidéo Veo qui se génère…).
+MEDIA_EN_COURS = (
+    "[role='progressbar'], mat-progress-spinner, mat-spinner, mat-progress-bar, "
+    "[class*='image-loading'], [class*='video-loading'], [class*='generating'], [class*='loading-placeholder']"
+)

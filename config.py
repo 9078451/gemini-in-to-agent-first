@@ -16,6 +16,10 @@ DELAI_REPONSE = 180.0  # secondes max pour qu'une réponse Gemini se termine
 DELAI_REPONSE_COWORK = 600.0  # s, par message en Cowork : 4 Argon peut réfléchir plusieurs minutes avant d'écrire
 STABILITE = 2.0  # secondes sans changement du texte = réponse finie
 DELAI_AGENT = 290.0  # attente max d'Agent First (file d'attente + Gemini)
+ATTENTE_FILE = DELAI_AGENT - DELAI_REPONSE  # part de DELAI_AGENT laissée à l'attente de son tour
+
+# Création d'images, de vidéos et de musique : plus long qu'une réponse écrite.
+DELAI_MEDIA = {"image": 240.0, "video": 900.0, "musique": 600.0}  # s, réponse de Gemini
 
 # Mode Cowork
 DELAI_COMMANDE = 120.0  # secondes max pour une commande PowerShell
@@ -42,6 +46,7 @@ DOSSIER_DONNEES = RACINE / "donnees"
 DOSSIER_JOURNAUX = RACINE / "journaux"
 FICHIER_HISTORIQUE = DOSSIER_DONNEES / "historique.db"
 FICHIER_CLE_API = DOSSIER_DONNEES / "cle_api.txt"
+DOSSIER_MEDIAS = DOSSIER_DONNEES / "medias"  # images, vidéos et sons créés par Gemini
 
 # Utilisés tant que la liste n'a pas pu être lue dans Gemini (relevés le 2026-10-15).
 MODELES_PAR_DEFAUT = [

@@ -75,3 +75,20 @@ test("réglage par défaut bloqué : on prend un choix disponible", () => {
   assert.equal(choixDisponible([{ nom: "Max.", description: bloque, actif: true }], "Max."), "Max.");
   assert.equal(choixDisponible([], "Min."), null);
 });
+
+test("création de médias : attente, outil du message, avertissement, taille", async () => {
+  const { texteAttente, outilDuMessage, avertissementMedia, tailleFichier } = await import("../../agent_first/web/outils.js");
+  assert.equal(texteAttente(null), "Gemini réfléchit…");
+  assert.match(texteAttente("video"), /vidéo/);
+  assert.equal(outilDuMessage({ details: '{"outil": "image"}' }), "image");
+  assert.equal(outilDuMessage({ details: null }), null);
+  assert.equal(outilDuMessage({ details: "{cassé" }), null);
+  assert.equal(avertissementMedia(null, []), null);
+  assert.equal(avertissementMedia("image", [{ type: "image" }]), null);
+  assert.match(avertissementMedia("image", []), /pas renvoyé d'image/);
+  assert.match(avertissementMedia("musique", [{ type: "image" }]), /pas renvoyé de musique/);
+  assert.match(avertissementMedia(null, [], 2), /non récupérés : 2/);
+  assert.equal(tailleFichier(512), "512 o");
+  assert.equal(tailleFichier(1536), "1,5 Ko");
+  assert.equal(tailleFichier(25 * 1024 * 1024), "25 Mo");
+});

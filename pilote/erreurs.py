@@ -86,6 +86,16 @@ class LimiteGemini(ErreurPilote):
         )
 
 
+class PageInstable(ErreurPilote):
+    """La page de Gemini a changé sous le pilote (onglet fermé ou rechargé, Chrome relancé)."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(
+            "La page Gemini a changé pendant l'envoi (onglet fermé ou rechargé ?). "
+            f"Vérifie la fenêtre Chrome dédiée, puis renvoie ton message. Détail : {detail}"
+        )
+
+
 class DelaiDepasse(ErreurPilote):
     def __init__(self, delai: float, partiel: str) -> None:
         self.partiel = partiel

@@ -7,6 +7,7 @@ from agent_first.openai_compat import (
     morceaux,
     nettoyer_reponse,
     niveau_depuis_effort,
+    resoudre_modele,
     texte_message,
     vers_api,
 )
@@ -17,12 +18,15 @@ def test_niveau_depuis_effort():
     assert niveau_depuis_effort("medium") == "Moyen"
     assert niveau_depuis_effort("HIGH") == "Max."
     assert niveau_depuis_effort(None) is None
+    assert niveau_depuis_effort("none") == "Min." and niveau_depuis_effort("xhigh") == "Max."
     assert niveau_depuis_effort("extreme") is None
 
 
 def test_texte_message():
     assert texte_message("a") == "a"
-    assert texte_message([{"type": "text", "text": "a"}, {"type": "image_url"}, {"type": "text", "text": "b"}]) == "a\nb"
+    assert texte_message([{"type": "text", "text": "a"}, {"type": "image_url"}, {"type": "text", "text": "b"}]) == (
+        "a\n[image jointe, non transmise à Gemini]\nb"
+    )
     assert texte_message(None) == ""
 
 
@@ -39,7 +43,7 @@ def test_mettre_a_plat_avec_systeme_et_historique():
     ])
     assert texte.startswith("[System instructions]\nSois bref.")
     assert "[Conversation so far]\nUser: Salut\n\nAssistant: Bonjour !" in texte
-    assert texte.endswith("[New message]\nÇa va ?")
+    assert texte.endswith('[New message — answer it directly, following the instructions above; no "Assistant:" prefix]\nÇa va ?')
 
 
 def test_empreinte():
@@ -96,3 +100,22 @@ def test_vers_api_traduit_les_temps():
 
 def test_vers_api_conversation_neuve():
     assert vers_api({"type": "relais", "corps": "x"})["type"] == "new_gemini_chat"
+
+
+def test_resoudre_modele():
+    noms = ["3.5 Flash-Lite", "3.5 Flash", "3.1 Pro", "4 Argon"]
+    assert resoudre_modele("3.1 Pro", noms) == "3.1 Pro"
+    assert resoudre_modele("gemini-3.1-pro", noms) == "3.1 Pro"
+    assert resoudre_modele("gemini-3.1-pro-preview", noms) == "3.1 Pro"
+    assert resoudre_modele("gemini-3.5-flash-lite", noms) == "3.5 Flash-Lite"
+    assert resoudre_modele("3.5-flash", noms) == "3.5 Flash"
+    assert resoudre_modele("argon", noms) == "4 Argon"
+    for courant in (None, "agent-first", "default", "gpt-4o", "flash", ""):
+        assert resoudre_modele(courant, noms) is None, courant  # « flash » : ambigu
+
+
+def test_completion_et_morceaux_avec_medias():
+    extras = {"images": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}]}
+    assert completion("Voici", "4 Argon", "x", extras)["choices"][0]["message"]["images"] == extras["images"]
+    premier = json.loads(next(morceaux("Voici", "4 Argon", extras))[len("data: "):])
+    assert premier["choices"][0]["delta"]["images"] == extras["images"]
