@@ -124,10 +124,10 @@ kbd { padding: 0 5px; border: 1px solid var(--bordure-2); border-radius: 4px; co
 .chemin svg { width: 13px; height: 13px; }
 #nom-dossier { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* processus lancés par Cowork (serveurs…) */
-.processus { display: flex; gap: 6px; flex: 0 1 auto; min-width: 0; }
-.pilule-processus { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 1px 3px 1px 9px; border: 1px solid var(--bordure-2); border-radius: 999px; color: var(--texte-2); font: 11.5px var(--police-mono); }
+.processus { display: flex; gap: 6px; flex: 0 1 auto; min-width: 92px; overflow: hidden; } /* garde point + Arrêter ; ne déborde pas sur Chat/Cowork */
+.pilule-processus { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding: 1px 3px 1px 9px; border: 1px solid var(--bordure-2); border-radius: 999px; color: var(--texte-2); font: 11.5px var(--police-mono); }
 .point-processus { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--vert); }
-.pilule-commande { overflow: hidden; max-width: 220px; text-overflow: ellipsis; white-space: nowrap; }
+.pilule-commande { overflow: hidden; min-width: 0; max-width: 220px; text-overflow: ellipsis; white-space: nowrap; }
 .pilule-arreter { flex: none; padding: 0 7px; border-radius: 999px; color: var(--accent); font: 11.5px var(--police); }
 .pilule-arreter:hover { background: var(--survol); }
 .discussion-entete .segments { margin-left: auto; }

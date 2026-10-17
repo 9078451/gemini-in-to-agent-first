@@ -18,7 +18,9 @@ sur Gemini : connecte-toi à ton compte Google dedans, une seule fois.
 ## Utilisation
 
 Double-clique `demarrer.bat` : Agent First démarre (console réduite) et l'app
-s'ouvre dans sa propre fenêtre. Fermer la console arrête Agent First.
+s'ouvre dans sa propre fenêtre. Le Chrome dédié s'ouvre aussitôt sur Gemini, en
+arrière-plan, pour que le premier message n'attende pas. Fermer la console
+arrête Agent First.
 
 - **Nouvelle conversation**, choix du **modèle** et du **niveau de réflexion**
   en haut de la discussion ; Entrée envoie, Maj+Entrée va à la ligne.
@@ -49,6 +51,21 @@ Actions de Gemini (en anglais) : `list read search create edit delete run start
 logs stop visit plan ask done`. Les serveurs lancés avec `start` restent actifs
 après la tâche (pastille dans l'en-tête, bouton Arrêter) et s'arrêtent avec
 Agent First.
+
+**Rapidité.** Le temps part surtout chez Gemini, à chaque aller-retour :
+
+- Gemini enchaîne tout ce qu'il peut dans un seul message (créer, lancer,
+  vérifier, finir) ; le lot s'arrête à la première erreur ;
+- le fil montre le temps de chaque réponse (« Gemini a répondu en 14 s ») et le
+  bilan le total, pour choisir le modèle le plus rapide pour toi ;
+- au-delà de 30 messages (`TOURS_GEMINI_MAX` dans `config.py`), la demande
+  suivante part dans une conversation Gemini neuve, avec un résumé des demandes
+  précédentes : une longue conversation ralentit Gemini et le fait dériver ;
+- `search` ne fouille pas `node_modules`, `.venv`, `.git` ni les fichiers
+  binaires ; `read` peut lire un passage (`start`, `end`) d'un gros fichier.
+
+Conseil : 4 Argon avec la réflexion **Min.** ou **Moyen** ; « Max. » peut
+abandonner une longue demande sans répondre.
 
 ## API réseau
 
