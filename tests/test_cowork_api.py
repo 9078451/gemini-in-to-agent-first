@@ -135,6 +135,22 @@ def test_chaque_demande_part_avec_le_cadre(tmp_path):
     file.arreter()
 
 
+def test_cadre_construit_au_debut_reel_de_la_tache(tmp_path):
+    # Un seul Chrome : une tâche peut attendre son tour. Son cadre montre le dossier
+    # tel qu'il est quand elle commence, pas quand elle a été demandée.
+    pilote = FauxPilote([FINI])
+    client, file, historique, service = monter(tmp_path, [], pilote=pilote)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    libere = threading.Event()
+    file.soumettre(lambda _pilote: libere.wait(5))  # une autre demande occupe Gemini
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "range"})
+    (tmp_path / "arrive_entre_temps.txt").write_text("x", encoding="utf-8")
+    libere.set()
+    evenements(service, conv.id)
+    assert "arrive_entre_temps.txt" in pilote.textes[0]
+    file.arreter()
+
+
 def test_tache_cree_un_fichier(tmp_path):
     client, file, historique, service = monter(tmp_path, [bloc({"action": "create", "path": "a.txt", "content": "salut"}), FINI])
     conv = historique.creer(mode="cowork", dossier=str(tmp_path))

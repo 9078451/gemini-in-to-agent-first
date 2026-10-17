@@ -113,15 +113,9 @@ class ServiceCowork:
             self._ranger()
         try:
             self._historique.ajouter_message(conversation_id, "toi", texte)
-            dossier_travail = Path(dossier)
-            processus = self._processus_de(conversation_id, dossier_travail)
-            executeur = self._fabrique_executeur(dossier_travail, processus, session.arret)
-            session.tache, message = self._preparer(conversation_id, dossier_travail, texte, processus)
-        except Exception as e:  # sans cela, la conversation restait « en cours » (409) jusqu'au redémarrage
-            journal.exception("Tâche Cowork impossible à préparer")
-            self._emettre(conversation_id, session, {"type": "erreur", "corps": f"Impossible de préparer la tâche : {e}"})
-            self._finir(session)
-            return
+        except Exception:
+            self._finir(session)  # conversation supprimée entre-temps : rien à lancer
+            raise
         self._emettre(conversation_id, session, {"type": "statut", "statut": "queued"})
 
         def travail(pilote) -> None:
@@ -137,6 +131,18 @@ class ServiceCowork:
                 return resultat.reponse
 
             self._emettre(conversation_id, session, {"type": "statut", "statut": "running"})
+            try:
+                # Préparée à son début réel, pas à sa mise en file : la tâche a pu attendre son
+                # tour derrière une autre, le dossier et les processus ont pu changer entre-temps.
+                dossier_travail = Path(dossier)
+                processus = self._processus_de(conversation_id, dossier_travail)
+                executeur = self._fabrique_executeur(dossier_travail, processus, session.arret)
+                session.tache, message = self._preparer(conversation_id, dossier_travail, texte, processus)
+            except Exception as e:  # sans cela, la conversation restait « en cours » (409) jusqu'au redémarrage
+                journal.exception("Tâche Cowork impossible à préparer")
+                self._emettre(conversation_id, session, {"type": "erreur", "corps": f"Impossible de préparer la tâche : {e}"})
+                self._finir(session)
+                return
             try:
                 executer_tache(
                     message,
