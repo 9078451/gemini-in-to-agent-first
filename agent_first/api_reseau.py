@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
+from starlette.exceptions import HTTPException as ExceptionHttp
 
 from agent_first.cache_modes import CacheModes
 from agent_first.cle_api import GardeCle
@@ -90,8 +91,9 @@ def creer_api_reseau(
     memoire: OrderedDict[str, tuple[str, str]] = OrderedDict()  # empreinte → (conversation, adresse Gemini)
     verrou = threading.Lock()
 
-    @app.exception_handler(HTTPException)
-    def erreur_http(_requete, exc: HTTPException):
+    # Celle de Starlette (parente de celle de FastAPI) : corps illisible, route inconnue… aussi au format OpenAI.
+    @app.exception_handler(ExceptionHttp)
+    def erreur_http(_requete, exc: ExceptionHttp):
         return _erreur(exc.status_code, str(exc.detail))
 
     @app.exception_handler(RequestValidationError)

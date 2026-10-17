@@ -204,3 +204,17 @@ def test_cowork_decision_sans_demande_409(monte, tmp_path):
     identifiant = client.post("/v1/cowork", json={"folder": str(tmp_path), "request": "x"}).json()["id"]
     evenements_sse(client.get(f"/v1/cowork/{identifiant}/events"))
     assert client.post(f"/v1/cowork/{identifiant}/decision", json={"step": 3, "approve": True}).status_code == 409
+
+
+def test_corps_illisible_erreur_au_format_openai(monte):
+    # Trouvé en essai réel : un corps mal encodé renvoyait {"detail": …}, que les clients OpenAI ne lisent pas.
+    client, *_ = monte()
+    r = client.post("/v1/chat/completions", content=b'{"messages": [{"role": "user", "content": "\xe9t\xe9"}]}',
+                    headers={"Content-Type": "application/json"})
+    assert r.status_code == 400 and r.json()["error"]["type"] == "invalid_request_error"
+
+
+def test_route_inconnue_erreur_au_format_openai(monte):
+    client, *_ = monte()
+    r = client.get("/v1/inexistante")
+    assert r.status_code == 404 and "error" in r.json()
