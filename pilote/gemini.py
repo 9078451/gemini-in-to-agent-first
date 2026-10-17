@@ -8,7 +8,7 @@ from playwright.sync_api import Error as ErreurPlaywright
 from playwright.sync_api import Locator, Page
 
 from pilote import modes
-from pilote.attente import attendre_envoi, attendre_fin_reponse
+from pilote.attente import attendre_envoi, attendre_fin_reponse, attendre_nouvelle_reponse
 from pilote.chrome import ChromeDedie
 from pilote.erreurs import DelaiDepasse, ErreurPilote, PasConnecteGoogle, RepereIntrouvable, VerificationGoogle
 from pilote.modeles import Modes, ResultatGemini
@@ -138,7 +138,7 @@ class PiloteGemini:
         # avant même d'afficher le début de sa réponse.
         debut = time.monotonic()
         fin = debut + delai
-        nouvelle = self._attendre_nouvelle_reponse(page, nb_avant, fin, delai)
+        nouvelle = self._attendre_nouvelle_reponse(page, nb_avant, questions_avant + 1, delai)
         try:
             reponse = attendre_fin_reponse(
                 lire_texte=nouvelle.inner_text,
@@ -190,15 +190,18 @@ class PiloteGemini:
                 return
             time.sleep(0.2)
 
-    def _attendre_nouvelle_reponse(self, page: Page, nb_avant: int, fin: float, delai: float) -> Locator:
-        while time.monotonic() < fin:
-            reponses = premier_present(page, "reponse")
-            if reponses is not None and reponses.count() > nb_avant:
-                return reponses.nth(nb_avant)
-            time.sleep(0.3)
-        if self._generation_en_cours(page):
-            raise DelaiDepasse(delai, "")
-        raise RepereIntrouvable("reponse")
+    def _attendre_nouvelle_reponse(self, page: Page, nb_avant: int, nb_questions: int, delai: float) -> Locator:
+        trouvee = attendre_nouvelle_reponse(
+            compter_reponses=lambda: compter(page, "reponse"),
+            compter_questions=lambda: compter(page, "question"),
+            generation_en_cours=lambda: self._generation_en_cours(page),
+            nb_reponses_avant=nb_avant,
+            nb_questions_attendu=nb_questions,
+            delai=delai,
+        )
+        if not trouvee:
+            raise RepereIntrouvable("reponse")
+        return premier_present(page, "reponse").nth(nb_avant)
 
     def _bandeau_limite(self, page: Page) -> str | None:
         """Texte du bandeau « Votre limite sera réinitialisée à … », s'il est affiché."""

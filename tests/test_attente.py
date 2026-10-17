@@ -1,7 +1,7 @@
 import pytest
 
-from pilote.attente import attendre_envoi, attendre_fin_reponse, erreur_envoi
-from pilote.erreurs import DelaiDepasse, LimiteGemini, MessageNonEnvoye
+from pilote.attente import attendre_envoi, attendre_fin_reponse, attendre_nouvelle_reponse, erreur_envoi
+from pilote.erreurs import DelaiDepasse, LimiteGemini, MessageAbandonne, MessageNonEnvoye
 
 
 class Horloge:
@@ -91,3 +91,47 @@ def test_envoi_refuse_avec_bandeau_de_limite():
     erreur = erreur_envoi("Votre limite sera réinitialisée à 2:58 PM")
     assert isinstance(erreur, LimiteGemini)
     assert "2:58 PM" in str(erreur)
+
+
+
+# --- Gemini abandonne un message (trouvé en essai réel : 4 Argon Max. sur une longue demande) ---
+
+def compteur(*valeurs):
+    """Renvoie les valeurs une par une, puis répète la dernière."""
+    restantes = list(valeurs)
+    return lambda: restantes.pop(0) if len(restantes) > 1 else restantes[0]
+
+
+def attendre_reponse(reponses, questions, en_cours, horloge, delai=600.0):
+    return attendre_nouvelle_reponse(
+        reponses, questions, en_cours, nb_reponses_avant=0, nb_questions_attendu=1, delai=delai,
+        patience_abandon=8.0, intervalle=0.5, horloge=horloge, dormir=horloge.dormir,
+    )
+
+
+def test_nouvelle_reponse_trouvee():
+    assert attendre_reponse(compteur(0, 0, 1), compteur(1), lambda: True, Horloge()) is True
+
+
+def test_question_disparue_sans_generation_leve_message_abandonne():
+    horloge = Horloge()
+    with pytest.raises(MessageAbandonne) as erreur:
+        attendre_reponse(compteur(0), compteur(1, 1, 0), lambda: False, horloge)
+    assert horloge.t < 20  # quelques secondes, pas les 10 minutes du délai
+    assert "Min." in str(erreur.value)
+
+
+def test_disparition_breve_toleree():
+    # En passant de /app à /app/<id>, Gemini redessine la page : la question peut manquer un instant.
+    questions = compteur(1, 0, 0, 0, 1)
+    assert attendre_reponse(compteur(0, 0, 0, 0, 0, 0, 1), questions, lambda: False, Horloge()) is True
+
+
+def test_question_absente_mais_generation_en_cours_pas_d_abandon():
+    horloge = Horloge()
+    with pytest.raises(DelaiDepasse):
+        attendre_reponse(compteur(0), compteur(0), lambda: True, horloge, delai=60.0)
+
+
+def test_delai_sans_generation_ni_abandon_renvoie_faux():
+    assert attendre_reponse(compteur(0), compteur(1), lambda: False, Horloge(), delai=30.0) is False

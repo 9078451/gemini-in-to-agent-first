@@ -55,6 +55,18 @@ class MessageNonEnvoye(ErreurPilote):
         )
 
 
+class MessageAbandonne(ErreurPilote):
+    """Gemini a pris le message, réfléchi, puis l'a abandonné sans répondre : la page est
+    revenue à une nouvelle discussion (vu avec 4 Argon Max. sur une longue demande Cowork)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Gemini a abandonné ce message sans répondre (la page est revenue à une nouvelle discussion). "
+            "Cela arrive avec un niveau de réflexion « Max. » sur une longue demande : "
+            "choisis « Min. » ou « Moyen », puis renvoie ton message."
+        )
+
+
 class ChoixBloque(ErreurPilote):
     def __init__(self, nom: str, reinitialisation: str) -> None:
         self.nom = nom

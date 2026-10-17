@@ -2,7 +2,7 @@
 import time
 from typing import Callable
 
-from pilote.erreurs import DelaiDepasse, ErreurPilote, LimiteGemini, MessageNonEnvoye
+from pilote.erreurs import DelaiDepasse, ErreurPilote, LimiteGemini, MessageAbandonne, MessageNonEnvoye
 
 
 def erreur_envoi(bandeau_limite: str | None) -> ErreurPilote:
@@ -29,6 +29,40 @@ def attendre_envoi(
             return
         dormir(intervalle)
     raise erreur_envoi(lire_bandeau_limite())
+
+
+def attendre_nouvelle_reponse(
+    compter_reponses: Callable[[], int],
+    compter_questions: Callable[[], int],
+    generation_en_cours: Callable[[], bool],
+    nb_reponses_avant: int,
+    nb_questions_attendu: int,
+    delai: float,
+    patience_abandon: float = 8.0,
+    intervalle: float = 0.3,
+    horloge: Callable[[], float] = time.monotonic,
+    dormir: Callable[[float], None] = time.sleep,
+) -> bool:
+    """True dès qu'une nouvelle réponse apparaît ; False après `delai` sans réponse ni
+    génération. DelaiDepasse si Gemini génère encore au bout du délai. MessageAbandonne si
+    la question a disparu et que plus rien ne se génère depuis `patience_abandon` secondes :
+    Gemini a lâché le message, inutile d'attendre la fin du délai (jusqu'à 10 min)."""
+    fin = horloge() + delai
+    disparue_depuis = None
+    while horloge() < fin:
+        if compter_reponses() > nb_reponses_avant:
+            return True
+        if compter_questions() < nb_questions_attendu and not generation_en_cours():
+            # Un court trou est normal (la page se redessine en passant à /app/<id>).
+            disparue_depuis = disparue_depuis if disparue_depuis is not None else horloge()
+            if horloge() - disparue_depuis >= patience_abandon:
+                raise MessageAbandonne()
+        else:
+            disparue_depuis = None
+        dormir(intervalle)
+    if generation_en_cours():
+        raise DelaiDepasse(delai, "")
+    return False
 
 
 def attendre_fin_reponse(
