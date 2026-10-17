@@ -187,6 +187,23 @@ def test_cowork_409_et_suite(monte, tmp_path):
     assert r.status_code == 200
 
 
+def test_cowork_message_refuse_pas_enregistre(monte, tmp_path):
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    client, _, historique, service = monte(['```json\n{"action": "delete", "path": "a.txt"}\n```'])
+    identifiant = client.post("/v1/cowork", json={"folder": str(tmp_path), "request": "supprime"}).json()["id"]
+    fin = time.monotonic() + 5
+    while client.get(f"/v1/cowork/{identifiant}").json()["status"] != "waiting_approval":
+        assert time.monotonic() < fin
+        time.sleep(0.05)
+    service.en_cours = lambda _identifiant: False  # la course : le contrôle passe, la réservation échoue
+    try:
+        assert client.post(f"/v1/cowork/{identifiant}/messages", json={"text": "encore"}).status_code == 409
+        assert [m.texte for m in historique.messages(identifiant) if m.role == "toi"] == ["supprime"]
+    finally:
+        client.post(f"/v1/cowork/{identifiant}/stop")
+        evenements_sse(client.get(f"/v1/cowork/{identifiant}/events"))
+
+
 def test_cowork_inconnu_404(monte):
     client, *_ = monte()
     assert client.get("/v1/cowork/absent").status_code == 404

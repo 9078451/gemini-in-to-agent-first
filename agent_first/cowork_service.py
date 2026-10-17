@@ -102,6 +102,8 @@ class ServiceCowork:
     def demarrer(
         self, conversation_id: str, dossier: str, adresse: str | None, texte: str, modele, niveau
     ) -> None:
+        """Lance la tâche et enregistre le message de l'utilisateur, une fois la conversation
+        réservée : refusé (TacheEnCours), il ne laisse rien dans l'historique."""
         with self._verrou:
             ancienne = self._sessions.get(conversation_id)
             if ancienne is not None and not ancienne.fini:
@@ -110,6 +112,7 @@ class ServiceCowork:
             self._sessions[conversation_id] = session
             self._ranger()
         try:
+            self._historique.ajouter_message(conversation_id, "toi", texte)
             dossier_travail = Path(dossier)
             processus = self._processus_de(conversation_id, dossier_travail)
             executeur = self._fabrique_executeur(dossier_travail, processus, session.arret)

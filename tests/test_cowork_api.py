@@ -279,6 +279,27 @@ def test_409_si_tache_en_cours(tmp_path):
     file.arreter()
 
 
+def test_message_refuse_pas_enregistre(tmp_path):
+    # Deux envois presque simultanés : le second passe le contrôle « en cours » avant que le
+    # premier ait réservé la conversation, puis est refusé. Son texte ne doit pas rester.
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    client, file, historique, service = monter(tmp_path, [bloc({"action": "delete", "path": "a.txt"})])
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    collectes = []
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "supprime"})
+    fil = threading.Thread(target=drainer_dans, args=(service, conv.id, collectes))
+    fil.start()
+    attendre(collectes, "demande")
+    service.en_cours = lambda _identifiant: False  # la course : le contrôle passe, la réservation échoue
+    try:
+        assert client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "encore"}).status_code == 409
+        assert [m.texte for m in historique.messages(conv.id) if m.role == "toi"] == ["supprime"]
+    finally:
+        service.arreter(conv.id)
+        fil.join(timeout=5)
+        file.arreter()
+
+
 def test_conversation_renvoie_tache_en_cours(tmp_path):
     (tmp_path / "a.txt").write_text("x", encoding="utf-8")
     client, file, historique, service = monter(tmp_path, [bloc({"action": "delete", "path": "a.txt"})])
@@ -441,7 +462,6 @@ def test_arreter_coupe_un_lot(tmp_path):
     service = ServiceCowork(file, historique, lambda d, p, a: Executeur(d, 5, 8000, lancer=lent, processus=p, arret=a),
                             REGLAGES, fabrique_processus)
     conv = historique.creer(mode="cowork", dossier=str(tmp_path))
-    historique.ajouter_message(conv.id, "toi", "cinq commandes")
     service.demarrer(conv.id, str(tmp_path), None, "cinq commandes", None, None)
     while not lances:
         time.sleep(0.02)
