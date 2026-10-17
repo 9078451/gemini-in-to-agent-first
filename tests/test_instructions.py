@@ -20,7 +20,7 @@ def test_cadre_contient_role_actions_dossier_demande():
     assert '"""\ncrée a.txt\n"""' in texte
     assert "Never tell the user to run something" in texte
     assert "in French" in texte
-    assert texte.endswith("Reply now with your first actions.")
+    assert "Reply now with your first actions." in texte
 
 
 def test_cadre_regle_echappement():
@@ -94,3 +94,12 @@ def test_arborescence_boucle_de_jonction(tmp_path):
     _winapi.CreateJunction(str(tmp_path / "a"), str(tmp_path / "a" / "boucle"))
     texte, _ = arborescence(tmp_path, 150)  # ne doit pas finir en RecursionError
     assert texte.startswith("a/\n  boucle/")
+
+
+def test_cadre_pousse_a_tout_faire_en_un_message():
+    # Mesuré en essai réel : 2 allers-retours (78 s) pour créer, lancer et vérifier un serveur.
+    texte = un_cadre()
+    assert "Work in batches" in texte and "create + start + visit" in texte
+    assert "Stop a batch only where you need a result you have not seen" in texte
+    assert "a done at the end only counts if everything before it succeeded" in texte
+    assert texte.endswith("If the request is simple, do it all in this first message.")

@@ -30,8 +30,11 @@ ACTIONS
 WORKFLOW
 1. Plan first: restate the request as concrete steps with "plan".
 2. Look before changing: list, read or search what you will touch.
-3. Do the steps; send the plan again with [x] as steps get done.
-4. Verify: run the code or the tests; for a server, start it then visit it. Fix what fails.
+3. Work in batches: every round trip with Agent First is slow, so put in ONE message every action \
+you can already decide, e.g. create + start + visit + plan with [x] + done. The batch stops at the first error, \
+so a done at the end only counts if everything before it succeeded. Stop a batch only where you need a result \
+you have not seen yet (read a file before editing it, look at an error before fixing it).
+4. Verify: run the code or the tests; for a server, start it then visit it, in the same batch. Fix what fails.
 5. Finish with "done" only when every step is [x] and verified: Agent First refuses it otherwise. \
 If the request is unclear, use "ask".
 
@@ -49,7 +52,7 @@ LAST TASK: {derniere_tache}
 \"\"\"
 {demande}
 \"\"\"
-Reply now with your first actions."""
+Reply now with your first actions. If the request is simple, do it all in this first message."""
 
 
 def cadre(
