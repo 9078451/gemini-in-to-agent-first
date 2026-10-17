@@ -90,6 +90,34 @@ def test_models(monte):
     assert donnees["object"] == "list" and [m["id"] for m in donnees["data"]] == ["4 Argon", "3.1 Pro"]
 
 
+def test_models_sans_attendre_une_longue_tache(monte, tmp_path):
+    # Une tâche Cowork peut occuper Gemini des minutes : /v1/models répond tout de suite
+    # (liste par défaut) et ne met pas de lecture des modèles en file derrière elle.
+    client, pilote, *_ = monte([FINI])
+    lectures = []
+    pilote.lister_modes = lambda: lectures.append(1) or Modes([Option("5 Ultra", "")], [])
+    appele, libere = threading.Event(), threading.Event()
+    envoyer = pilote.envoyer
+
+    def lent(*args, **kwargs):
+        appele.set()
+        libere.wait(5)
+        return envoyer(*args, **kwargs)
+
+    pilote.envoyer = lent
+    identifiant = client.post("/v1/cowork", json={"folder": str(tmp_path), "request": "x"}).json()["id"]
+    assert appele.wait(5)
+    debut = time.monotonic()
+    try:
+        ids = [m["id"] for m in client.get("/v1/models").json()["data"]]
+        assert time.monotonic() - debut < 2 and ids == ["4 Argon", "3.1 Pro"]
+    finally:
+        libere.set()
+        evenements_sse(client.get(f"/v1/cowork/{identifiant}/events"))
+    assert lectures == []
+    assert [m["id"] for m in client.get("/v1/models").json()["data"]] == ["5 Ultra"]
+
+
 def test_chat_completion(monte):
     client, pilote, historique, _ = monte()
     r = client.post("/v1/chat/completions", json={"model": "4 Argon", "messages": [{"role": "user", "content": "Salut"}]})

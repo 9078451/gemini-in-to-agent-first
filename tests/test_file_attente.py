@@ -67,3 +67,18 @@ def test_erreur_transmise_et_file_continue(file):
     with pytest.raises(PasConnecteGoogle):
         file.soumettre(echoue).result(timeout=5)
     assert file.soumettre(lambda p: p.travailler(0)).result(timeout=5) == "fait"
+
+
+def test_occupee_tant_qu_une_demande_tourne_ou_attend(file):
+    assert not file.occupee()
+    libere = threading.Event()
+    premiere = file.soumettre(lambda p: libere.wait(5))
+    seconde = file.soumettre(lambda p: p.travailler(0))
+    assert file.occupee()
+    libere.set()
+    premiere.result(timeout=5)
+    seconde.result(timeout=5)
+    fin = time.monotonic() + 2
+    while file.occupee() and time.monotonic() < fin:
+        time.sleep(0.01)
+    assert not file.occupee()
