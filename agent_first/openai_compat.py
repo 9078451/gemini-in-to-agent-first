@@ -99,7 +99,7 @@ TYPES = {
     "demande": "approval_required", "autorise": "auto_approved", "refus": "refused",
     "erreur_format": "format_error", "erreur_gemini": "gemini_error", "relance_fin": "done_refused",
     "termine": "done", "question": "question", "limite": "limit_reached", "arret": "stopped",
-    "erreur": "error", "statut": "status", "processus": "processes", "tour": "round",
+    "erreur": "error", "statut": "status", "processus": "processes", "tour": "round", "relais": "new_gemini_chat",
 }
 CLES = {
     "etape": "step", "champs": "fields", "corps": "output", "raison": "reason", "resume": "summary",

@@ -30,6 +30,7 @@ ATTENTE_DEMARRAGE = 3.0  # s : sortie lue après un start avant de répondre à 
 DELAI_VISITE = 10.0  # s : délai d'une requête « visit »
 MAX_ENTREES_ARBORESCENCE = 150  # lignes du contenu du dossier envoyé à Gemini
 TAILLE_MAX_MESSAGE = 30000  # caractères d'un message de résultats envoyé à Gemini
+TOURS_GEMINI_MAX = 30  # messages dans une conversation Gemini avant d'en ouvrir une neuve (avec un résumé)
 
 # API réseau (autres programmes, autres PC du réseau), protégée par une clé
 API_ACTIVE = True

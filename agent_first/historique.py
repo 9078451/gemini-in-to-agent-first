@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     mode TEXT NOT NULL DEFAULT 'chat',
     dossier TEXT,
     source TEXT NOT NULL DEFAULT 'app',
+    tours_gemini INTEGER NOT NULL DEFAULT 0,
     cree_le TEXT NOT NULL,
     modifie_le TEXT NOT NULL
 );
@@ -45,10 +46,11 @@ CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id);
 """
 # Colonnes ajoutées après la v2 : migrées à l'ouverture des bases existantes.
 COLONNES_AJOUTEES = {
-    "conversations": [("mode", "TEXT NOT NULL DEFAULT 'chat'"), ("dossier", "TEXT"), ("source", "TEXT NOT NULL DEFAULT 'app'")],
+    "conversations": [("mode", "TEXT NOT NULL DEFAULT 'chat'"), ("dossier", "TEXT"), ("source", "TEXT NOT NULL DEFAULT 'app'"),
+                      ("tours_gemini", "INTEGER NOT NULL DEFAULT 0")],
     "messages": [("details", "TEXT")],
 }
-COLONNES_CONVERSATION = """c.id, c.titre, c.adresse, c.modele, c.niveau, c.mode, c.dossier, c.source,
+COLONNES_CONVERSATION = """c.id, c.titre, c.adresse, c.modele, c.niveau, c.mode, c.dossier, c.source, c.tours_gemini,
     c.cree_le, c.modifie_le,
     (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id) AS nb_messages"""
 COLONNES_MESSAGE = "id, conversation_id, role, texte, html, modele, niveau, duree, details, cree_le"
@@ -71,6 +73,7 @@ class Conversation:
     cree_le: str
     modifie_le: str
     source: str = "app"  # « app » ou « api » (créée par un autre programme via l'API réseau)
+    tours_gemini: int = 0  # messages envoyés dans la conversation Gemini en cours (Cowork)
     nb_messages: int = 0
 
 
@@ -138,6 +141,19 @@ class Historique:
                 (depuis, depuis, motif, motif, motif),
             ).fetchall()
         return [Conversation(**dict(ligne)) for ligne in lignes]
+
+    def compter_tour(self, identifiant: str) -> None:
+        """Un message de plus envoyé dans la conversation Gemini en cours."""
+        with self._verrou:
+            self._base.execute("UPDATE conversations SET tours_gemini = tours_gemini + 1 WHERE id = ?", (identifiant,))
+            self._base.commit()
+
+    def repartir(self, identifiant: str) -> None:
+        """La prochaine demande part dans une conversation Gemini neuve."""
+        with self._verrou:
+            self._conversation(identifiant)
+            self._base.execute("UPDATE conversations SET adresse = NULL, tours_gemini = 0 WHERE id = ?", (identifiant,))
+            self._base.commit()
 
     def enregistrer_adresse(self, identifiant: str, adresse: str) -> None:
         with self._verrou:

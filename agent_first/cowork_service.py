@@ -39,7 +39,10 @@ STATUT_APRES = {
     "limite": "stopped",
 }
 SESSIONS_GARDEES = 20  # tâches finies gardées en mémoire (rejouer, état pour l'API)
-LIBELLE_FIN = {"termine": "done", "limite": "stopped (round limit)", "arret": "stopped", "erreur": "error"}
+LIBELLE_FIN = {
+    "termine": "done", "limite": "stopped (round limit)", "arret": "stopped", "erreur": "error", "question": "asked a question",
+}
+TACHES_RESUMEES = 10  # demandes précédentes résumées quand une conversation Gemini neuve démarre
 
 
 class TacheEnCours(Exception):
@@ -77,6 +80,7 @@ class ServiceCowork:
         delai_reponse: float | None = None,
         diffuseur: Diffuseur | None = None,
         max_entrees: int = 150,
+        tours_max: int = 30,
     ) -> None:
         self._file = file
         self._historique = historique
@@ -91,6 +95,9 @@ class ServiceCowork:
         self._delai_reponse = delai_reponse
         self._diffuseur = diffuseur
         self._max_entrees = max_entrees
+        # Au-delà de ce nombre de messages, une conversation Gemini ralentit et dérive :
+        # la demande suivante part dans une conversation neuve, avec un résumé.
+        self._tours_max = tours_max
         self._sessions: dict[str, _Session] = {}
         self._processus: dict[str, GestionnaireProcessus] = {}
         self._verrou = threading.Lock()
@@ -125,6 +132,7 @@ class ServiceCowork:
                 if session.arret.is_set():
                     raise _Arret()
                 resultat = pilote.envoyer(etat["adresse"], msg, modele, niveau, delai=self._delai_reponse)
+                self._historique.compter_tour(conversation_id)
                 etat["adresse"] = resultat.adresse
                 if etat["adresse"]:
                     self._historique.enregistrer_adresse(conversation_id, etat["adresse"])
@@ -137,7 +145,14 @@ class ServiceCowork:
                 dossier_travail = Path(dossier)
                 processus = self._processus_de(conversation_id, dossier_travail)
                 executeur = self._fabrique_executeur(dossier_travail, processus, session.arret)
-                session.tache, message = self._preparer(conversation_id, dossier_travail, texte, processus)
+                session.tache, message, relais = self._preparer(conversation_id, dossier_travail, texte, processus)
+                if relais:
+                    etat["adresse"] = None
+                    self._historique.repartir(conversation_id)
+                    self._emettre(conversation_id, session, {
+                        "type": "relais",
+                        "corps": f"l'ancienne avait {relais} messages : Gemini reçoit le résumé des demandes précédentes",
+                    })
             except Exception as e:  # sans cela, la conversation restait « en cours » (409) jusqu'au redémarrage
                 journal.exception("Tâche Cowork impossible à préparer")
                 self._emettre(conversation_id, session, {"type": "erreur", "corps": f"Impossible de préparer la tâche : {e}"})
@@ -170,11 +185,16 @@ class ServiceCowork:
 
     def _preparer(
         self, conversation_id: str, dossier: Path, texte: str, processus: GestionnaireProcessus
-    ) -> tuple[EtatTache, str]:
-        """L'état de la tâche (repris après une question) et le message à envoyer à Gemini."""
+    ) -> tuple[EtatTache, str, int]:
+        """L'état de la tâche (repris après une question), le message à envoyer à Gemini, et
+        s'il faut une conversation Gemini neuve : le nombre de messages de l'ancienne, ou 0."""
         pause = self._historique.derniere_etape(conversation_id, PAUSES)
         reprise = pause is not None and pause["type"] == "question"
         tache = EtatTache.depuis_dict(pause.get("tache", {})) if reprise else EtatTache()
+        conversation = self._historique.conversation(conversation_id)
+        # Jamais au milieu d'une question : Gemini doit garder le fil pour comprendre la réponse.
+        longue = not reprise and conversation.adresse is not None and conversation.tours_gemini >= self._tours_max
+        relais = conversation.tours_gemini if longue else 0
         contenu, entrees = arborescence(dossier, self._max_entrees)
         message = cadre(
             dossier,
@@ -185,11 +205,29 @@ class ServiceCowork:
             derniere_tache=_derniere_tache(self._historique.derniere_etape(conversation_id, FINS)),
             reponse=reprise,
             max_actions=self._reglages.max_actions,
+            conversation=self._resume_conversation(conversation_id) if relais else "",
         )
         if tache.resultats_en_attente:  # les actions d'avant la question : Gemini n'en a pas vu le résultat
             message = f"{tache.resultats_en_attente}\n\n{message}"
             tache.resultats_en_attente = ""
-        return tache, message
+        return tache, message, relais
+
+    def _resume_conversation(self, conversation_id: str) -> str:
+        """Les demandes précédentes et leur issue, pour une conversation Gemini neuve."""
+        taches: list[list] = []  # [demande, évènement de fin]
+        for message in self._historique.messages(conversation_id):
+            if message.role == "toi":
+                taches.append([message.texte, None])
+            elif message.role == "cowork" and message.details and taches:
+                evenement = json.loads(message.details)
+                if evenement["type"] in PAUSES:
+                    taches[-1][1] = evenement
+        lignes = []
+        for demande, fin in taches[:-1][-TACHES_RESUMEES:]:  # la dernière est la demande en cours
+            court = " ".join(demande.split())
+            court = court if len(court) <= 200 else court[:199] + "…"
+            lignes.append(f'- "{court}" → {_derniere_tache(fin) if fin else "no result"}')
+        return "\n".join(lignes)
 
     # ---- suivre, décider, arrêter -----------------------------------------
 
@@ -422,6 +460,8 @@ def _derniere_tache(fin: dict | None) -> str:
     morceaux = [LIBELLE_FIN.get(fin["type"], fin["type"])]
     if fin.get("resume"):
         morceaux.append(f"summary: {fin['resume']}")
+    elif fin.get("question"):
+        morceaux.append(f"question: {fin['question']}")
     elif fin.get("corps"):
         morceaux.append(f"reason: {fin['corps']}")
     bilan = fin.get("bilan") or {}

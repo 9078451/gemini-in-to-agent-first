@@ -195,3 +195,14 @@ def test_derniere_etape(historique):
     historique.ajouter_etape(c.id, {"type": "question", "question": "?"})
     assert historique.derniere_etape(c.id, {"termine"})["resume"] == "un"
     assert historique.derniere_etape(c.id, {"termine", "question"})["type"] == "question"
+
+
+def test_tours_gemini_comptes_puis_remis_a_zero(historique):
+    c = historique.creer(mode="cowork", dossier="C:/x")
+    historique.enregistrer_adresse(c.id, "https://gemini.google.com/app/1")
+    historique.compter_tour(c.id)
+    historique.compter_tour(c.id)
+    assert historique.conversation(c.id).tours_gemini == 2
+    historique.repartir(c.id)
+    lue = historique.conversation(c.id)
+    assert lue.tours_gemini == 0 and lue.adresse is None

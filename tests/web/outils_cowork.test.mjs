@@ -126,3 +126,7 @@ test("bilan : les temps de Gemini et des actions", () => {
     temps: { gemini: 73.4, actions: 5.1 } });
   assert.match(compteurs, /Gemini 73 s · actions 5 s/);
 });
+
+test("conversation Gemini neuve : un libellé clair", () => {
+  assert.match(libelleEtape({ type: "relais", corps: "x" }).titre, /Nouvelle conversation Gemini/);
+});

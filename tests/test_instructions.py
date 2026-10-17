@@ -103,3 +103,9 @@ def test_cadre_pousse_a_tout_faire_en_un_message():
     assert "Stop a batch only where you need a result you have not seen" in texte
     assert "a done at the end only counts if everything before it succeeded" in texte
     assert texte.endswith("If the request is simple, do it all in this first message.")
+
+
+def test_cadre_avec_le_resume_de_la_conversation():
+    texte = un_cadre(conversation='- "crée a.txt" → done — created: a.txt')
+    assert "EARLIER IN THIS CONVERSATION" in texte and '- "crée a.txt" → done — created: a.txt' in texte
+    assert "EARLIER IN THIS CONVERSATION" not in un_cadre()

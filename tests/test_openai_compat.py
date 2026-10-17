@@ -92,3 +92,7 @@ def test_choisir_adresse_prefere_le_reseau_local():
 def test_vers_api_traduit_les_temps():
     assert vers_api({"type": "tour", "gemini": 12.5}) == {"type": "round", "gemini": 12.5}
     assert vers_api({"bilan": {"temps": {"gemini": 1.0, "actions": 2.0}}}) == {"report": {"timing": {"gemini": 1.0, "actions": 2.0}}}
+
+
+def test_vers_api_conversation_neuve():
+    assert vers_api({"type": "relais", "corps": "x"})["type"] == "new_gemini_chat"

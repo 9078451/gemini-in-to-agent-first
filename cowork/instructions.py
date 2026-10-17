@@ -46,7 +46,7 @@ WORKING FOLDER: {dossier}   (all paths are relative to it)
 FOLDER CONTENT ({entrees}):
 {contenu}
 RUNNING PROCESSES: {processus}
-LAST TASK: {derniere_tache}
+{conversation}LAST TASK: {derniere_tache}
 
 {entete}
 \"\"\"
@@ -65,7 +65,10 @@ def cadre(
     derniere_tache: str,
     reponse: bool,
     max_actions: int,
+    conversation: str = "",
 ) -> str:
+    """`conversation` : le résumé des demandes précédentes, quand la tâche part dans une
+    conversation Gemini neuve (l'ancienne était devenue longue)."""
     return _GABARIT.format(
         max_actions=max_actions,
         actions=liste_compacte(),
@@ -74,6 +77,10 @@ def cadre(
         entrees=f"{entrees} {'entry' if entrees == '1' else 'entries'}",
         processus=processus or "none",
         derniere_tache=derniere_tache or "none",
+        conversation=(
+            f"EARLIER IN THIS CONVERSATION (this is a new Gemini chat; what the user asked before):\n{conversation}\n"
+            if conversation else ""
+        ),
         entete="USER ANSWER TO YOUR QUESTION:" if reponse else "USER REQUEST:",
         demande=demande,
     )

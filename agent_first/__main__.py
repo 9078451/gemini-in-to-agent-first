@@ -81,7 +81,7 @@ def main() -> None:
     cowork = ServiceCowork(
         file, historique, fabrique_executeur, reglages, fabrique_processus,
         delai_accord=config.DELAI_ACCORD, delai_reponse=config.DELAI_REPONSE_COWORK,
-        diffuseur=diffuseur, max_entrees=config.MAX_ENTREES_ARBORESCENCE,
+        diffuseur=diffuseur, max_entrees=config.MAX_ENTREES_ARBORESCENCE, tours_max=config.TOURS_GEMINI_MAX,
     )
     garde, adresse_api, serveur_api = None, None, None
     if config.API_ACTIVE:

@@ -33,9 +33,11 @@ class FauxPilote:
         self._reponses = list(reponses)
         self.textes = []
         self.delais = []
+        self.adresses = []
 
     def envoyer(self, adresse, texte, modele=None, niveau=None, delai=None):
         self.textes.append(texte)
+        self.adresses.append(adresse)
         self.delais.append(delai)
         reponse = self._reponses.pop(0) if self._reponses else FINI
         return ResultatGemini(reponse=reponse, adresse="https://gemini.google.com/app/1")
@@ -626,3 +628,38 @@ def test_bilan_avec_les_temps(tmp_path):
     evs = lancer_tache(client, service, conv.id, "liste")
     assert set(fin(evs)["bilan"]["temps"]) == {"gemini", "actions"}
     assert sum(e["type"] == "tour" for e in evs) == 2
+
+
+def test_conversation_gemini_neuve_quand_elle_est_longue(tmp_path):
+    # Une longue conversation Gemini ralentit et dérive (213 étapes dans l'essai du 16/10).
+    pilote = FauxPilote([bloc({"action": "create", "path": "a.txt", "content": "x"}), FINI, FINI, FINI])
+    file = FileAttente(lambda: pilote)
+    file.demarrer()
+    historique = Historique(tmp_path / "historique.db")
+    service = service_sur(file, historique, tours_max=2)
+    app = creer_app(file, historique, 2.0, lambda: True, PAR_DEFAUT, cowork=service)
+    client = TestClient(app)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    lancer_tache(client, service, conv.id, "crée a.txt")  # 2 messages à Gemini
+    assert historique.conversation(conv.id).tours_gemini == 2
+    evs = lancer_tache(client, service, conv.id, "et maintenant ?")
+    assert pilote.adresses[2] is None  # nouvelle conversation Gemini
+    assert "EARLIER IN THIS CONVERSATION" in pilote.textes[2] and '"crée a.txt"' in pilote.textes[2]
+    assert "relais" in types(evs)
+    assert historique.conversation(conv.id).tours_gemini == 1
+    file.arreter()
+
+
+def test_pas_de_conversation_neuve_au_milieu_d_une_question(tmp_path):
+    pilote = FauxPilote([bloc({"action": "ask", "question": "Quel port ?"}), FINI])
+    file = FileAttente(lambda: pilote)
+    file.demarrer()
+    historique = Historique(tmp_path / "historique.db")
+    service = service_sur(file, historique, tours_max=1)
+    app = creer_app(file, historique, 2.0, lambda: True, PAR_DEFAUT, cowork=service)
+    client = TestClient(app)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    lancer_tache(client, service, conv.id, "fais un serveur")
+    lancer_tache(client, service, conv.id, "8080")
+    assert pilote.adresses[1] is not None and "EARLIER IN THIS CONVERSATION" not in pilote.textes[1]
+    file.arreter()

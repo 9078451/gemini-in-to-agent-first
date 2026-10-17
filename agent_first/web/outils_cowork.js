@@ -30,6 +30,7 @@ const CHAMPS_ANCIENS = { chemin: "path", contenu: "content", avant: "old", apres
 const AUTRES = {
   plan: { icone: "i-check", titre: "Plan" },
   tour: { icone: "i-horloge", titre: "Réponse de Gemini" },
+  relais: { icone: "i-messages", titre: "Nouvelle conversation Gemini, avec un résumé" },
   saute: { icone: "i-fermer", titre: "Action sautée : une action précédente a échoué" },
   demande: { icone: "i-alerte", titre: "Action jugée dangereuse : ton accord est nécessaire" },
   autorise: { icone: "i-check", titre: "Action dangereuse autorisée d'office (toujours autoriser)" },

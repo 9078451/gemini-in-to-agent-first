@@ -645,7 +645,8 @@ function creerRenduCowork(conteneur, interactif) {
       ajouterBilan(ev.bilan);
     } else {
       if (ev.type === "refus" && derniere) marquerEtape(derniere, "ko");
-      ajouterLigne(noteEtape(ev, ["autorise", "erreur_gemini", "relance_fin"].includes(ev.type) ? "decision" : "ko"));
+      const point = ["autorise", "erreur_gemini", "relance_fin"].includes(ev.type) ? "decision" : ev.type === "relais" ? "" : "ko";
+      ajouterLigne(noteEtape(ev, point));
       if (FIN_DE_TACHE.includes(ev.type)) ajouterBilan(ev.bilan);
     }
     defilerEnBas();
