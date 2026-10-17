@@ -197,6 +197,8 @@ kbd { padding: 0 5px; border: 1px solid var(--bordure-2); border-radius: 4px; co
 .etape-note { display: flex; align-items: center; gap: 8px; padding: 3px 0; color: var(--texte-2); font: 12.5px var(--police); }
 .etape-note .etape-detail { font-family: var(--police-mono); font-size: 12px; }
 .etape-note > span:nth-child(2) { flex: none; white-space: nowrap; } /* le titre reste sur une ligne ; le détail se coupe */
+.etape-tour { padding: 4px 0 1px; color: var(--texte-3); font: 11.5px var(--police); }
+.groupe-etapes > .etape-tour:first-child { padding-top: 0; }
 .etape.sautee { display: flex; align-items: center; gap: 8px; padding: 3px 0; opacity: .5; }
 .etape-corps .contexte { color: var(--texte-3); }
 .etape-corps .repere { color: var(--texte-3); font-style: italic; }

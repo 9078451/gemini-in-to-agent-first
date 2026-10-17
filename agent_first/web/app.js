@@ -1,7 +1,7 @@
 // agent.first — état, affichage et événements de l'app.
 import { appeler } from "./api.js";
 import { cheminCourt, choixDisponible, formaterDate, formaterDuree, groupesParDate, limiteOption, metaMessage, titreDepuis } from "./outils.js";
-import { avancementPlan, infoResultat, libelleEtape, lignesBilan, nombreLignes, normaliserAction, resumeDiff } from "./outils_cowork.js";
+import { avancementPlan, detailTour, infoResultat, libelleEtape, lignesBilan, nombreLignes, normaliserAction, resumeDiff } from "./outils_cowork.js";
 
 const $ = (id) => document.getElementById(id);
 const CLE_DEFAUT = "agent.first.defaut";
@@ -614,7 +614,9 @@ function creerRenduCowork(conteneur, interactif) {
     // La tâche avance : une demande restée ouverte a été tranchée ailleurs (API, autre fenêtre).
     if (accordOuvert?.isConnected) accordOuvert.replaceWith(element("div", "accord-decision", "Décision prise."));
     accordOuvert = null;
-    if (ev.type === "action") {
+    if (ev.type === "tour") {
+      ajouterLigne(element("div", "etape-tour", detailTour(ev)));
+    } else if (ev.type === "action") {
       derniere = ligneEtape(ev, interactif);
       ajouterLigne(derniere);
     } else if (ev.type === "resultat") {

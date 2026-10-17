@@ -99,7 +99,7 @@ TYPES = {
     "demande": "approval_required", "autorise": "auto_approved", "refus": "refused",
     "erreur_format": "format_error", "erreur_gemini": "gemini_error", "relance_fin": "done_refused",
     "termine": "done", "question": "question", "limite": "limit_reached", "arret": "stopped",
-    "erreur": "error", "statut": "status", "processus": "processes",
+    "erreur": "error", "statut": "status", "processus": "processes", "tour": "round",
 }
 CLES = {
     "etape": "step", "champs": "fields", "corps": "output", "raison": "reason", "resume": "summary",
@@ -107,7 +107,7 @@ CLES = {
     "modifies": "modified", "supprimes": "deleted", "commandes": "commands", "code": "exit_code",
     "plan_inacheve": "unfinished_steps", "processus": "processes", "liste": "processes",
     "commande": "command", "depuis": "since", "actif": "running", "statut": "status",
-    "evenements": "events",
+    "evenements": "events", "temps": "timing",
 }
 CLES_INTERNES = {"tache"}  # l'état interne d'une tâche en pause n'a rien à faire dehors
 

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   avancementPlan,
+  detailTour,
   estDangereuse,
   infoResultat,
   libelleEtape,
@@ -113,4 +114,15 @@ test("libellé quand Gemini répond par sa propre erreur", () => {
   const e = libelleEtape({ type: "erreur_gemini", corps: "Sorry, something went wrong." });
   assert.match(e.titre, /Gemini/);
   assert.match(e.titre, /renvoy/);
+});
+
+test("une réponse de Gemini et son temps", () => {
+  assert.equal(detailTour({ type: "tour", gemini: 14.2 }), "Gemini a répondu en 14 s");
+  assert.equal(libelleEtape({ type: "tour", gemini: 14.2 }).titre, "Réponse de Gemini");
+});
+
+test("bilan : les temps de Gemini et des actions", () => {
+  const { compteurs } = lignesBilan({ crees: [], modifies: [], supprimes: [], commandes: [], verifications: 1,
+    temps: { gemini: 73.4, actions: 5.1 } });
+  assert.match(compteurs, /Gemini 73 s · actions 5 s/);
 });

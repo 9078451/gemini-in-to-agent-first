@@ -43,6 +43,8 @@ class EtatTache:
     relances: int = 0
     verifications: int = 0
     resultats_en_attente: str = ""  # résultats d'un lot interrompu par une question, à renvoyer à Gemini
+    temps_gemini: float = 0.0  # secondes passées à attendre les réponses de Gemini
+    temps_actions: float = 0.0  # secondes passées à exécuter les actions (sans les accords)
 
     def noter(self, action: Action, resultat: Resultat) -> None:
         if action.nom in VERIFICATIONS:
@@ -84,6 +86,7 @@ class EtatTache:
             "verifications": self.verifications,
             "plan_inacheve": self.etapes_restantes(),
             "processus": [p for p in processus if p.get("actif")],
+            "temps": {"gemini": round(self.temps_gemini, 1), "actions": round(self.temps_actions, 1)},
         }
 
     def vers_dict(self) -> dict:

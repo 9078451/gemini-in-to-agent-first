@@ -87,3 +87,8 @@ def test_choisir_adresse_prefere_le_reseau_local():
     assert choisir_adresse("10.0.0.5", ["192.168.56.1", "10.0.0.5"]) == "10.0.0.5"
     assert choisir_adresse(None, ["127.0.0.1", "169.254.3.4", "100.64.1.1"]) == "100.64.1.1"
     assert choisir_adresse(None, []) == "127.0.0.1"
+
+
+def test_vers_api_traduit_les_temps():
+    assert vers_api({"type": "tour", "gemini": 12.5}) == {"type": "round", "gemini": 12.5}
+    assert vers_api({"bilan": {"temps": {"gemini": 1.0, "actions": 2.0}}}) == {"report": {"timing": {"gemini": 1.0, "actions": 2.0}}}

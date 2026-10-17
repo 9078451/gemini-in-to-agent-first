@@ -74,7 +74,12 @@ def lancer(reponses, executeur=None, classer=TOUT_SUR, accord=ACCORD_OUI, tache=
 
 
 def types(evenements):
-    return [e["type"] for e in evenements]
+    """Les types d'évènements, sans « tour » (le temps de chaque réponse de Gemini)."""
+    return [e["type"] for e in evenements if e["type"] != "tour"]
+
+
+def sans_tours(evenements):
+    return [e for e in evenements if e["type"] != "tour"]
 
 
 def test_enchaine_puis_termine():
@@ -132,7 +137,7 @@ def test_trop_d_actions():
 
 def test_plan_emis():
     evs, envoyer, _ = lancer([bloc(plan("[ ] a", "[ ] b")), bloc(plan("[x] a", "[x] b"), fini())])
-    assert evs[0] == {"type": "plan", "etapes": [{"texte": "a", "fait": False}, {"texte": "b", "fait": False}]}
+    assert sans_tours(evs)[0] == {"type": "plan", "etapes": [{"texte": "a", "fait": False}, {"texte": "b", "fait": False}]}
     assert "plan saved (0/2 done)" in envoyer.messages[1]
     assert types(evs)[-1] == "termine"
 
@@ -192,7 +197,7 @@ def test_ask_garde_les_resultats_du_lot():
 
 def test_format_casse_garde_le_texte():
     evs, envoyer, _ = lancer(["je réfléchis à voix haute"] * 3)
-    assert types(evs).count("erreur_format") == 3 and evs[0]["corps"] == "je réfléchis à voix haute"
+    assert types(evs).count("erreur_format") == 3 and sans_tours(evs)[0]["corps"] == "je réfléchis à voix haute"
     assert evs[-1]["type"] == "erreur" and "format" in evs[-1]["corps"]
 
 
@@ -249,3 +254,24 @@ def test_arret_pendant_un_lot():
                    Reglages(max_tours=2, max_actions=10, echecs_max=3, taille_max=8000, taille_max_message=30000, relances_fin_max=2))
     assert len(executees) == 1
     assert envoyer.messages[1].count("SKIPPED\nstopped by the user") == 4
+
+
+def test_temps_de_gemini_et_des_actions():
+    # Chaque réponse de Gemini prend 10 s, chaque action 2 s (horloge simulée).
+    horloge = {"t": 0.0}
+    evenements = []
+    tache = EtatTache()
+
+    def envoyer(message, reponses=[bloc(LIRE, LIRE), bloc(fini())]):
+        horloge["t"] += 10
+        return reponses.pop(0)
+
+    def executer(action):
+        horloge["t"] += 2
+        return Resultat(True, "ok")
+
+    executer_tache("tâche", tache, Branchements(envoyer, executer, TOUT_SUR, ACCORD_OUI, evenements.append),
+                   Reglages(max_tours=5, max_actions=10, echecs_max=3, taille_max=8000, taille_max_message=30000,
+                            relances_fin_max=2), horloge=lambda: horloge["t"])
+    assert [e["gemini"] for e in evenements if e["type"] == "tour"] == [10.0, 10.0]
+    assert tache.temps_gemini == 20.0 and tache.temps_actions == 4.0

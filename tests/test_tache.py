@@ -102,3 +102,8 @@ def test_aller_retour_dict():
     copie = EtatTache.depuis_dict(tache.vers_dict())
     assert copie == tache
     assert EtatTache.depuis_dict({"plan": [], "inconnu": 3}) == EtatTache()
+
+
+def test_bilan_donne_les_temps():
+    tache = EtatTache(temps_gemini=73.44, temps_actions=5.06)
+    assert tache.bilan([])["temps"] == {"gemini": 73.4, "actions": 5.1}

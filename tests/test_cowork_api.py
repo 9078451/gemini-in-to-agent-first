@@ -185,7 +185,7 @@ def test_etapes_enregistrees(tmp_path):
     lancer_tache(client, service, conv.id, "liste")
     etapes = [json.loads(m["details"]) for m in client.get(f"/api/conversations/{conv.id}").json()["messages"]
               if m["role"] == "cowork"]
-    assert [e["type"] for e in etapes] == ["action", "resultat", "termine"]  # ni statut ni processus
+    assert [e["type"] for e in etapes] == ["tour", "action", "resultat", "tour", "termine"]  # ni statut ni processus
     file.arreter()
 
 
@@ -618,3 +618,11 @@ def test_preparation_impossible_ne_bloque_pas_la_conversation(tmp_path):
     assert fin(evs)["type"] == "erreur" and "dossier illisible" in fin(evs)["corps"]
     assert not service.en_cours(conv.id)
     file.arreter()
+
+
+def test_bilan_avec_les_temps(tmp_path):
+    client, file, historique, service = monter(tmp_path, [bloc({"action": "list"}), FINI])
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    evs = lancer_tache(client, service, conv.id, "liste")
+    assert set(fin(evs)["bilan"]["temps"]) == {"gemini", "actions"}
+    assert sum(e["type"] == "tour" for e in evs) == 2

@@ -6,6 +6,7 @@ La fin est contrôlée : un « done » est refusé tant que le plan a des étape
 cochées, ou si du code a été écrit sans être vérifié (une fois). La boucle ne
 connaît ni le pilote, ni le réseau, ni les fils : tout passe par les branchements.
 """
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -44,12 +45,18 @@ class Branchements:
     doit_arreter: Callable[[], bool] = lambda: False  # « Arrêter » coupe aussi un lot en cours
 
 
-def executer_tache(message: str, tache: EtatTache, b: Branchements, r: Reglages) -> None:
+def executer_tache(
+    message: str, tache: EtatTache, b: Branchements, r: Reglages, horloge: Callable[[], float] = time.monotonic
+) -> None:
     echecs = 0
     for _ in range(r.max_tours):
+        debut = horloge()
         reponse = _envoyer(b, message)
         if reponse is None:
             return
+        duree = horloge() - debut  # ce que l'utilisateur attend : la réflexion et l'écriture de Gemini
+        tache.temps_gemini += duree
+        b.emettre({"type": "tour", "gemini": round(duree, 1)})
         actions = lire_actions(reponse)
         if not actions:
             b.emettre({"type": "erreur_format", "corps": _extrait(reponse)})
@@ -60,7 +67,7 @@ def executer_tache(message: str, tache: EtatTache, b: Branchements, r: Reglages)
             message = rappel_pour(reponse)
             continue
         echecs = 0
-        suite = _traiter_lot(actions, tache, b, r)
+        suite = _traiter_lot(actions, tache, b, r, horloge)
         if suite is None:
             return
         message = suite
@@ -87,7 +94,9 @@ def _extrait(reponse: str) -> str:
     return texte if len(texte) <= EXTRAIT_MAX else texte[:EXTRAIT_MAX] + "…"
 
 
-def _traiter_lot(actions: list[Action], tache: EtatTache, b: Branchements, r: Reglages) -> str | None:
+def _traiter_lot(
+    actions: list[Action], tache: EtatTache, b: Branchements, r: Reglages, horloge: Callable[[], float]
+) -> str | None:
     """Exécute un lot ; renvoie le message de résultats à envoyer, ou None si la tâche
     s'arrête (fin acceptée ou question)."""
     notes = []
@@ -129,7 +138,7 @@ def _traiter_lot(actions: list[Action], tache: EtatTache, b: Branchements, r: Re
             faites = sum(e["fait"] for e in tache.plan)
             lignes.append(LigneResultat(rang, action, "OK", f"plan saved ({faites}/{len(tache.plan)} done)"))
         else:
-            echec = not _executer(action, rang, lignes, tache, b)
+            echec = not _executer(action, rang, lignes, tache, b, horloge)
     return formater_resultats(lignes, r.taille_max, r.taille_max_message, "\n".join(notes))
 
 
@@ -138,7 +147,9 @@ def _sauter(b: Branchements, lignes: list[LigneResultat], rang: int, action: Act
     lignes.append(LigneResultat(rang, action, "SKIPPED", raison))
 
 
-def _executer(action: Action, rang: int, lignes: list[LigneResultat], tache: EtatTache, b: Branchements) -> bool:
+def _executer(
+    action: Action, rang: int, lignes: list[LigneResultat], tache: EtatTache, b: Branchements, horloge: Callable[[], float]
+) -> bool:
     """Exécute une action (accord compris) ; True si elle a réussi."""
     b.emettre({"type": "action", "action": action.nom, "champs": action.champs})
     verdict = b.classer(action)
@@ -148,7 +159,9 @@ def _executer(action: Action, rang: int, lignes: list[LigneResultat], tache: Eta
             b.emettre({"type": "refus"})
             lignes.append(LigneResultat(rang, action, "ERROR", "refused by the user; find another way"))
             return False
+    debut = horloge()
     resultat = b.executer(action)
+    tache.temps_actions += horloge() - debut
     tache.noter(action, resultat)
     b.emettre({"type": "resultat", "ok": resultat.ok, "corps": resultat.corps, "diff": resultat.diff, "code": resultat.code})
     if resultat.ok:

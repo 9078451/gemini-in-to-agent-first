@@ -29,6 +29,7 @@ const CHAMPS_ANCIENS = { chemin: "path", contenu: "content", avant: "old", apres
 
 const AUTRES = {
   plan: { icone: "i-check", titre: "Plan" },
+  tour: { icone: "i-horloge", titre: "Réponse de Gemini" },
   saute: { icone: "i-fermer", titre: "Action sautée : une action précédente a échoué" },
   demande: { icone: "i-alerte", titre: "Action jugée dangereuse : ton accord est nécessaire" },
   autorise: { icone: "i-check", titre: "Action dangereuse autorisée d'office (toujours autoriser)" },
@@ -61,6 +62,15 @@ export function libelleEtape(ev) {
   }
   const autre = AUTRES[ev.type] ?? { icone: "i-etincelle", titre: ev.type };
   return { icone: autre.icone, verbe: ev.type, titre: autre.titre, detail: ev.raison ?? ev.resume ?? ev.question ?? ev.corps ?? "" };
+}
+
+// Une réponse de Gemini, avec son temps : on voit où part le temps d'une tâche.
+export function detailTour(ev) {
+  return `Gemini a répondu en ${secondes(ev.gemini)}`;
+}
+
+function secondes(valeur) {
+  return `${Math.round(valeur ?? 0)} s`;
 }
 
 export function estDangereuse(ev) {
@@ -101,6 +111,7 @@ export function lignesBilan(bilan) {
     verifications ? pluriel(verifications, "vérification") : "aucune vérification",
   ];
   if (echecs) morceaux.push(`${echecs} en échec`);
+  if (bilan.temps) morceaux.push(`Gemini ${secondes(bilan.temps.gemini)} · actions ${secondes(bilan.temps.actions)}`);
   const fichiers = [
     ...(bilan.crees ?? []).map((chemin) => ({ signe: "+", chemin })),
     ...(bilan.modifies ?? []).map((chemin) => ({ signe: "~", chemin })),
