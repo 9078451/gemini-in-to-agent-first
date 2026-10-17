@@ -284,6 +284,12 @@ class ServiceCowork:
         return gestionnaire.arreter(numero)
 
     def arreter_tout(self) -> None:
+        """Agent First s'arrête : les tâches d'abord (sinon l'une d'elles pourrait encore
+        lancer un serveur qui survivrait), puis les processus."""
+        for conversation_id, session in list(self._sessions.items()):
+            if not session.fini:
+                session.raison_arret = session.raison_arret or "Agent First s'est arrêté"
+                self.arreter(conversation_id)
         for gestionnaire in list(self._processus.values()):
             gestionnaire.arreter_tout()
 

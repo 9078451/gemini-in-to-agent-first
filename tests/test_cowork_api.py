@@ -312,6 +312,33 @@ def test_processus_survit_a_la_tache_et_s_arrete(tmp_path):
     file.arreter()
 
 
+def test_arreter_tout_arrete_d_abord_la_tache(tmp_path):
+    # À la fermeture d'Agent First, une tâche qui attendait encore Gemini ne doit pas
+    # lancer un serveur une fois les processus arrêtés : il survivrait à Agent First.
+    appele, libere = threading.Event(), threading.Event()
+
+    class PiloteLent(FauxPilote):
+        def envoyer(self, *args, **kwargs):
+            appele.set()
+            libere.wait(5)
+            return super().envoyer(*args, **kwargs)
+
+    pilote = PiloteLent([bloc({"action": "start", "command": "python serveur.py"}), FINI])
+    client, file, historique, service = monter(tmp_path, [], pilote=pilote)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "lance le serveur"})
+    assert appele.wait(5)
+    service.arreter_tout()
+    libere.set()
+    evs = evenements(service, conv.id)
+    try:
+        assert fin(evs)["type"] == "arret" and fin(evs)["raison"] == "Agent First s'est arrêté"
+        assert not [p for p in service.processus(conv.id) if p["actif"]]
+    finally:
+        service.arreter_tout()
+        file.arreter()
+
+
 def test_processus_dans_le_cadre_suivant(tmp_path):
     pilote = FauxPilote([bloc({"action": "start", "command": "python serveur.py"}), FINI, FINI])
     client, file, historique, service = monter(tmp_path, [], pilote=pilote)
