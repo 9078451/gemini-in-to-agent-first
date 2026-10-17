@@ -40,7 +40,7 @@ File actions only work inside the working folder. Deletions and risky commands n
 Agent First asks for it. If refused, find another way.
 
 WORKING FOLDER: {dossier}   (all paths are relative to it)
-FOLDER CONTENT:
+FOLDER CONTENT ({entrees}):
 {contenu}
 RUNNING PROCESSES: {processus}
 LAST TASK: {derniere_tache}
@@ -57,6 +57,7 @@ def cadre(
     demande: str,
     *,
     contenu: str,
+    entrees: str,
     processus: str,
     derniere_tache: str,
     reponse: bool,
@@ -67,6 +68,7 @@ def cadre(
         actions=liste_compacte(),
         dossier=dossier,
         contenu=contenu,
+        entrees=f"{entrees} {'entry' if entrees == '1' else 'entries'}",
         processus=processus or "none",
         derniere_tache=derniere_tache or "none",
         entete="USER ANSWER TO YOUR QUESTION:" if reponse else "USER REQUEST:",
@@ -74,8 +76,9 @@ def cadre(
     )
 
 
-def arborescence(dossier: Path, max_entrees: int) -> str:
-    """Le contenu du dossier, dossiers d'abord, indenté ; coupé à `max_entrees` lignes."""
+def arborescence(dossier: Path, max_entrees: int) -> tuple[str, str]:
+    """Le contenu du dossier, dossiers d'abord, indenté ; coupé à `max_entrees` lignes.
+    Avec le nombre d'entrées (« 10150+ » quand le compte s'est arrêté)."""
     lignes, reste = [], 0
     for ligne in _entrees(dossier, 0):
         if len(lignes) < max_entrees:
@@ -85,10 +88,12 @@ def arborescence(dossier: Path, max_entrees: int) -> str:
             if reste >= _COMPTE_MAX:
                 break
     if not lignes:
-        return "(empty)"
+        return "(empty)", "0"
+    plus = "+" if reste >= _COMPTE_MAX else ""
+    entrees = f"{len(lignes) + reste}{plus}"
     if reste:
-        lignes.append(f"… ({reste}{'+' if reste >= _COMPTE_MAX else ''} more)")
-    return "\n".join(lignes)
+        lignes.append(f"… ({reste}{plus} more)")
+    return "\n".join(lignes), entrees
 
 
 def _entrees(dossier: Path, profondeur: int):

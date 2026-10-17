@@ -175,10 +175,12 @@ class ServiceCowork:
         pause = self._historique.derniere_etape(conversation_id, PAUSES)
         reprise = pause is not None and pause["type"] == "question"
         tache = EtatTache.depuis_dict(pause.get("tache", {})) if reprise else EtatTache()
+        contenu, entrees = arborescence(dossier, self._max_entrees)
         message = cadre(
             dossier,
             texte,
-            contenu=arborescence(dossier, self._max_entrees),
+            contenu=contenu,
+            entrees=entrees,
             processus=_processus_actifs(processus.liste()),
             derniere_tache=_derniere_tache(self._historique.derniere_etape(conversation_id, FINS)),
             reponse=reprise,

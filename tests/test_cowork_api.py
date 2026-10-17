@@ -175,7 +175,7 @@ def test_derniere_tache_dans_le_cadre(tmp_path):
     lancer_tache(client, service, conv.id, "crée a.txt")
     lancer_tache(client, service, conv.id, "et après ?")
     assert "LAST TASK: done" in pilote.textes[-1] and "a.txt" in pilote.textes[-1]
-    assert "a.txt" in pilote.textes[-1].split("FOLDER CONTENT:")[1]
+    assert "a.txt" in pilote.textes[-1].split("FOLDER CONTENT (")[1]
     file.arreter()
 
 
