@@ -14,10 +14,11 @@ import subprocess
 import threading
 import time
 from difflib import SequenceMatcher
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Callable
 
 from cowork.catalogue import Action, Resultat, valider
+from cowork.instructions import DOSSIERS_IGNORES
 from cowork.visite import visiter
 
 if TYPE_CHECKING:
@@ -28,6 +29,8 @@ __all__ = ["Executeur", "Resultat", "HorsDossier", "lancer_powershell", "tuer_ar
 LIGNES_DIFF_MAX = 200
 LIGNES_PASSAGE_MAX = 5000  # au-delà, on ne cherche pas de passage proche
 CANDIDATES_PASSAGE = 15  # fenêtres comparées finement pour trouver le passage proche
+RESULTATS_RECHERCHE_MAX = 200  # lignes renvoyées par « search » ; au-delà, un compte
+TAILLE_FICHIER_RECHERCHE_MAX = 2_000_000  # octets : un fichier plus gros n'est pas fouillé
 
 
 class HorsDossier(Exception):
@@ -154,24 +157,62 @@ class Executeur:
         return Resultat(True, "\n".join(noms) or "(empty folder)")
 
     def _lire(self, c: dict) -> Resultat:
-        return Resultat(True, self._couper(_lire_texte(self._resoudre(c["path"]))))
+        chemin = _affiche(c["path"])
+        texte = _lire_texte(self._resoudre(chemin))
+        lignes = texte.splitlines()
+        if c.get("start") or c.get("end"):  # un passage d'un gros fichier, sans tout relire
+            try:
+                debut = max(1, int(c.get("start") or 1))
+                fin = min(len(lignes), int(c.get("end") or len(lignes)))
+            except ValueError:
+                return Resultat(False, '"start" and "end" must be line numbers')
+            if debut > fin:
+                return Resultat(False, f"{chemin} has {len(lignes)} lines")
+            extrait = "\n".join(lignes[debut - 1 : fin])
+            return Resultat(True, self._couper(f"{chemin} lines {debut}-{fin} of {len(lignes)}:\n{extrait}"))
+        if len(texte) > self._taille_max:
+            return Resultat(True, texte[: self._taille_max] + (
+                f'\n…(cut: the file has {len(lignes)} lines; read the rest with "start" and "end")'
+            ))
+        return Resultat(True, texte)
 
     def _chercher(self, c: dict) -> Resultat:
         motif, glob = c["pattern"], c.get("glob") or "**/*"
         if ".." in glob.replace("\\", "/").split("/") or Path(glob).is_absolute() or Path(glob).drive:
             raise HorsDossier(glob)
-        racine = self._dossier.resolve()
-        lignes = []
-        for fichier in self._dossier.glob(glob):
-            if not fichier.is_file() or not fichier.resolve().is_relative_to(racine):
-                continue
+        lignes, en_plus = [], 0
+        for fichier, relatif in self._fichiers(glob):
             try:
+                if fichier.stat().st_size > TAILLE_FICHIER_RECHERCHE_MAX:
+                    continue
+                with open(fichier, "rb") as flux:
+                    if b"\0" in flux.read(1024):  # binaire (image, archive…) : rien à y chercher
+                        continue
                 for i, ligne in enumerate(_lire_texte(fichier).splitlines(), 1):
                     if motif in ligne:
-                        lignes.append(f"{fichier.relative_to(self._dossier).as_posix()}:{i}: {ligne.strip()}")
+                        if len(lignes) < RESULTATS_RECHERCHE_MAX:
+                            lignes.append(f"{relatif}:{i}: {ligne.strip()}")
+                        else:
+                            en_plus += 1
             except OSError:
                 continue
-        return Resultat(True, self._couper("\n".join(lignes)) or "(no match)")
+        texte = "\n".join(lignes)
+        if en_plus:
+            texte += f"\n… ({en_plus} more matches: refine the pattern or the glob)"
+        return Resultat(True, self._couper(texte) or "(no match)")
+
+    def _fichiers(self, glob: str):
+        """Les fichiers du dossier qui correspondent au glob, sans descendre dans les dossiers
+        lourds (node_modules, .venv, .git…) : avant, une recherche les lisait tous."""
+        for dossier, sous_dossiers, fichiers in os.walk(self._dossier):
+            sous_dossiers[:] = sorted(
+                d for d in sous_dossiers if d not in DOSSIERS_IGNORES and not os.path.isjunction(os.path.join(dossier, d))
+            )
+            for nom in sorted(fichiers):
+                chemin = Path(dossier) / nom
+                relatif = chemin.relative_to(self._dossier).as_posix()
+                if PurePosixPath(relatif).full_match(glob):
+                    yield chemin, relatif
 
     def _creer(self, c: dict) -> Resultat:
         chemin, contenu = _affiche(c["path"]), c["content"]

@@ -257,3 +257,68 @@ def test_passage_proche_avec_une_faute(ex, tmp_path):
     (tmp_path / "a.py").write_text("def calculer_total(prix, quantite):\n    return prix * quantite\n", encoding="utf-8")
     r = ex.executer(Action("edit", {"path": "a.py", "old": "def calculer_totale(prix, quantité):", "new": "x"}))
     assert "Closest passage (lines 1-1)" in r.corps
+
+
+# --- performance des actions (v3.1) ---
+
+def test_chercher_ignore_les_dossiers_lourds(ex, tmp_path):
+    for dossier in ("node_modules/lib", ".venv/Lib", ".git/objects", "src"):
+        (tmp_path / dossier).mkdir(parents=True)
+        (tmp_path / dossier / "f.js").write_text("const cible = 1;\n", encoding="utf-8")
+    r = ex.executer(Action("search", {"pattern": "cible"}))
+    assert r.corps == "src/f.js:1: const cible = 1;"
+
+
+def test_chercher_sans_lire_un_gros_node_modules(ex, tmp_path):
+    import time
+
+    for i in range(3000):
+        paquet = tmp_path / "node_modules" / f"p{i}"
+        paquet.mkdir(parents=True)
+        (paquet / "index.js").write_text("cible\n", encoding="utf-8")
+    debut = time.monotonic()
+    assert ex.executer(Action("search", {"pattern": "cible"})).corps == "(no match)"
+    assert time.monotonic() - debut < 1
+
+
+def test_chercher_ignore_les_binaires(ex, tmp_path):
+    (tmp_path / "image.png").write_bytes(b"\x89PNG\x00\x00cible\x00")
+    (tmp_path / "a.txt").write_text("cible", encoding="utf-8")
+    assert ex.executer(Action("search", {"pattern": "cible"})).corps == "a.txt:1: cible"
+
+
+def test_chercher_plafonne_les_resultats(ex, tmp_path):
+    (tmp_path / "a.txt").write_text("cible\n" * 1000, encoding="utf-8")
+    r = ex.executer(Action("search", {"pattern": "cible"}))
+    assert r.corps.count("\n") <= 201 and "more matches" in r.corps
+
+
+def test_chercher_avec_glob(ex, tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("cible", encoding="utf-8")
+    (tmp_path / "b.js").write_text("cible", encoding="utf-8")
+    (tmp_path / "c.py").write_text("cible", encoding="utf-8")
+    assert ex.executer(Action("search", {"pattern": "cible", "glob": "**/*.py"})).corps == "c.py:1: cible\nsrc/a.py:1: cible"
+
+
+def test_lire_un_passage(ex, tmp_path):
+    (tmp_path / "gros.py").write_text("".join(f"ligne {i}\n" for i in range(1, 501)), encoding="utf-8")
+    r = ex.executer(Action("read", {"path": "gros.py", "start": "100", "end": "102"}))
+    assert r.corps == "gros.py lines 100-102 of 500:\nligne 100\nligne 101\nligne 102"
+
+
+def test_lire_un_passage_borne_a_la_fin(ex, tmp_path):
+    (tmp_path / "a.py").write_text("un\ndeux\n", encoding="utf-8")
+    assert ex.executer(Action("read", {"path": "a.py", "start": "2", "end": "99"})).corps == "a.py lines 2-2 of 2:\ndeux"
+
+
+def test_lire_un_gros_fichier_coupe_dit_comment_lire_la_suite(tmp_path):
+    ex = Executeur(tmp_path, 5, 100)
+    (tmp_path / "gros.py").write_text("".join(f"ligne {i}\n" for i in range(1, 501)), encoding="utf-8")
+    r = ex.executer(Action("read", {"path": "gros.py"}))
+    assert "500 lines" in r.corps and '"start"' in r.corps
+
+
+def test_lire_un_passage_invalide(ex, tmp_path):
+    (tmp_path / "a.py").write_text("un\n", encoding="utf-8")
+    assert ex.executer(Action("read", {"path": "a.py", "start": "x"})).ok is False

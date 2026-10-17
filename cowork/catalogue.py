@@ -39,7 +39,7 @@ class Definition:
 _DEFINITIONS = [
     Definition("list", (), ("path",), "list a folder (default: the working folder)",
                {"action": "list", "path": "."}, "lister"),
-    Definition("read", ("path",), (), "read a text file",
+    Definition("read", ("path",), ("start", "end"), "read a text file; for a big one, only lines start..end",
                {"action": "read", "path": "app.py"}, "lire"),
     Definition("search", ("pattern",), ("glob",), "find a text in files (glob filters the files)",
                {"action": "search", "pattern": "def main", "glob": "**/*.py"}, "chercher"),
