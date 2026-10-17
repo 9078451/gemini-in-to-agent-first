@@ -135,6 +135,22 @@ def test_chaque_demande_part_avec_le_cadre(tmp_path):
     file.arreter()
 
 
+def test_cadre_construit_au_debut_reel_de_la_tache(tmp_path):
+    # Un seul Chrome : une tâche peut attendre son tour. Son cadre montre le dossier
+    # tel qu'il est quand elle commence, pas quand elle a été demandée.
+    pilote = FauxPilote([FINI])
+    client, file, historique, service = monter(tmp_path, [], pilote=pilote)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    libere = threading.Event()
+    file.soumettre(lambda _pilote: libere.wait(5))  # une autre demande occupe Gemini
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "range"})
+    (tmp_path / "arrive_entre_temps.txt").write_text("x", encoding="utf-8")
+    libere.set()
+    evenements(service, conv.id)
+    assert "arrive_entre_temps.txt" in pilote.textes[0]
+    file.arreter()
+
+
 def test_tache_cree_un_fichier(tmp_path):
     client, file, historique, service = monter(tmp_path, [bloc({"action": "create", "path": "a.txt", "content": "salut"}), FINI])
     conv = historique.creer(mode="cowork", dossier=str(tmp_path))
@@ -159,7 +175,7 @@ def test_derniere_tache_dans_le_cadre(tmp_path):
     lancer_tache(client, service, conv.id, "crée a.txt")
     lancer_tache(client, service, conv.id, "et après ?")
     assert "LAST TASK: done" in pilote.textes[-1] and "a.txt" in pilote.textes[-1]
-    assert "a.txt" in pilote.textes[-1].split("FOLDER CONTENT:")[1]
+    assert "a.txt" in pilote.textes[-1].split("FOLDER CONTENT (")[1]
     file.arreter()
 
 
@@ -279,6 +295,27 @@ def test_409_si_tache_en_cours(tmp_path):
     file.arreter()
 
 
+def test_message_refuse_pas_enregistre(tmp_path):
+    # Deux envois presque simultanés : le second passe le contrôle « en cours » avant que le
+    # premier ait réservé la conversation, puis est refusé. Son texte ne doit pas rester.
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    client, file, historique, service = monter(tmp_path, [bloc({"action": "delete", "path": "a.txt"})])
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    collectes = []
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "supprime"})
+    fil = threading.Thread(target=drainer_dans, args=(service, conv.id, collectes))
+    fil.start()
+    attendre(collectes, "demande")
+    service.en_cours = lambda _identifiant: False  # la course : le contrôle passe, la réservation échoue
+    try:
+        assert client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "encore"}).status_code == 409
+        assert [m.texte for m in historique.messages(conv.id) if m.role == "toi"] == ["supprime"]
+    finally:
+        service.arreter(conv.id)
+        fil.join(timeout=5)
+        file.arreter()
+
+
 def test_conversation_renvoie_tache_en_cours(tmp_path):
     (tmp_path / "a.txt").write_text("x", encoding="utf-8")
     client, file, historique, service = monter(tmp_path, [bloc({"action": "delete", "path": "a.txt"})])
@@ -310,6 +347,77 @@ def test_processus_survit_a_la_tache_et_s_arrete(tmp_path):
     assert client.get(f"/api/cowork/{conv.id}/processus").json()["processus"][0]["actif"] is False
     service.arreter_tout()
     file.arreter()
+
+
+def test_arreter_tout_arrete_d_abord_la_tache(tmp_path):
+    # À la fermeture d'Agent First, une tâche qui attendait encore Gemini ne doit pas
+    # lancer un serveur une fois les processus arrêtés : il survivrait à Agent First.
+    appele, libere = threading.Event(), threading.Event()
+
+    class PiloteLent(FauxPilote):
+        def envoyer(self, *args, **kwargs):
+            appele.set()
+            libere.wait(5)
+            return super().envoyer(*args, **kwargs)
+
+    pilote = PiloteLent([bloc({"action": "start", "command": "python serveur.py"}), FINI])
+    client, file, historique, service = monter(tmp_path, [], pilote=pilote)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "lance le serveur"})
+    assert appele.wait(5)
+    service.arreter_tout()
+    libere.set()
+    evs = evenements(service, conv.id)
+    try:
+        assert fin(evs)["type"] == "arret" and fin(evs)["raison"] == "Agent First s'est arrêté"
+        assert not [p for p in service.processus(conv.id) if p["actif"]]
+    finally:
+        service.arreter_tout()
+        file.arreter()
+
+
+def test_supprimer_la_conversation_arrete_ses_processus_et_oublie_ses_accords(tmp_path):
+    # Supprimée, la conversation n'a plus d'en-tête dans l'app : ses serveurs ne doivent pas
+    # tourner jusqu'à la fermeture d'Agent First, ni ses « toujours autoriser » rester en mémoire.
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    reponses = [bloc({"action": "start", "command": "python serveur.py"}, {"action": "delete", "path": "a.txt"}), FINI]
+    client, file, historique, service = monter(tmp_path, reponses)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    collectes = []
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "lance et supprime"})
+    fil = threading.Thread(target=drainer_dans, args=(service, conv.id, collectes))
+    fil.start()
+    demande = attendre(collectes, "demande")
+    client.post(f"/api/cowork/{conv.id}/decision", json={"etape": demande["etape"], "reponse": "continuer", "toujours": True})
+    fil.join(timeout=5)
+    gestionnaire = service._processus[conv.id]
+    try:
+        assert [p["actif"] for p in gestionnaire.liste()] == [True] and conv.id in service._toujours
+        assert client.delete(f"/api/conversations/{conv.id}").status_code == 200
+        assert [p["actif"] for p in gestionnaire.liste()] == [False]
+        assert conv.id not in service._processus and conv.id not in service._toujours
+    finally:
+        gestionnaire.arreter_tout()
+        file.arreter()
+
+
+def test_supprimer_la_conversation_arrete_sa_tache(tmp_path):
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    client, file, historique, service = monter(tmp_path, [bloc({"action": "delete", "path": "a.txt"})])
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    collectes = []
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "supprime"})
+    fil = threading.Thread(target=drainer_dans, args=(service, conv.id, collectes))
+    fil.start()
+    attendre(collectes, "demande")
+    try:
+        client.delete(f"/api/conversations/{conv.id}")
+        attendre(collectes, "arret")
+    finally:
+        service.arreter(conv.id)
+        fil.join(timeout=5)
+        file.arreter()
+    assert (tmp_path / "a.txt").exists()
 
 
 def test_processus_dans_le_cadre_suivant(tmp_path):
@@ -414,7 +522,6 @@ def test_arreter_coupe_un_lot(tmp_path):
     service = ServiceCowork(file, historique, lambda d, p, a: Executeur(d, 5, 8000, lancer=lent, processus=p, arret=a),
                             REGLAGES, fabrique_processus)
     conv = historique.creer(mode="cowork", dossier=str(tmp_path))
-    historique.ajouter_message(conv.id, "toi", "cinq commandes")
     service.demarrer(conv.id, str(tmp_path), None, "cinq commandes", None, None)
     while not lances:
         time.sleep(0.02)

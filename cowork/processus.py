@@ -15,6 +15,7 @@ from typing import Callable
 
 from cowork.actions import commande_powershell, tuer_arbre
 from cowork.catalogue import Resultat
+from cowork.job_windows import rattacher
 
 journal = logging.getLogger(__name__)
 _GARDE = 4  # on garde au plus taille_max × _GARDE caractères de sortie par processus
@@ -100,6 +101,7 @@ class GestionnaireProcessus:
                 errors="replace",
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
             )
+            rattacher(popen.pid)  # meurt avec Agent First, même s'il plante
             processus = _Processus(len(self._processus) + 1, commande, popen, self._taille_max)
             self._processus.append(processus)
         threading.Thread(target=self._lire, args=(processus,), name=f"processus-{processus.numero}", daemon=True).start()

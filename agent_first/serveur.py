@@ -131,8 +131,7 @@ def creer_app(
             return erreur(422, "Cette conversation n'est pas une tâche Cowork avec un dossier.")
         if cowork.en_cours(identifiant):
             return erreur(409, EN_COURS)
-        historique.ajouter_message(identifiant, "toi", demande.texte)
-        try:
+        try:  # le service enregistre le message s'il accepte la tâche
             cowork.demarrer(identifiant, conv.dossier, conv.adresse, demande.texte, conv.modele, conv.niveau)
         except TacheEnCours:
             return erreur(409, EN_COURS)
@@ -202,6 +201,8 @@ def creer_app(
             historique.supprimer(identifiant)
         except ConversationInconnue:
             return erreur(404, INCONNUE)
+        if cowork is not None:
+            cowork.oublier(identifiant)
         return {"supprimee": True}
 
     @app.post("/api/conversations/{identifiant}/messages")

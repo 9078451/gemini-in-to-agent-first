@@ -5,6 +5,8 @@ Une tâche va de la demande de l'utilisateur au « done » accepté. Une questio
 Gemini (`ask`) la met en pause : l'état est alors gardé (`vers_dict`) pour la
 reprendre à la réponse, même après un redémarrage d'Agent First.
 """
+import os
+import posixpath
 import re
 from dataclasses import asdict, dataclass, field, fields
 
@@ -57,27 +59,27 @@ class EtatTache:
         return [etape["texte"] for etape in self.plan if not etape["fait"]]
 
     def bilan(self, processus: list[dict]) -> dict:
-        crees, modifies, supprimes = [], [], []
-        for effet, chemin in self.effets:
+        # Un fichier par clé (« ./a.py », « a.py » et, sous Windows, « A.py » sont le même),
+        # montré sous le premier chemin vu ; les dict gardent l'ordre d'arrivée.
+        crees, modifies, supprimes = {}, {}, {}
+        for effet, brut in self.effets:
+            chemin = posixpath.normpath(brut.replace("\\", "/"))
+            cle = os.path.normcase(chemin)
             if effet == "cree":
-                if chemin in supprimes:
-                    supprimes.remove(chemin)
-                if chemin not in crees:
-                    crees.append(chemin)
+                supprimes.pop(cle, None)
+                crees.setdefault(cle, chemin)
             elif effet == "modifie":
-                if chemin not in crees and chemin not in modifies:
-                    modifies.append(chemin)
-            elif chemin in crees:  # créé puis supprimé dans la même tâche : il n'en reste rien
-                crees.remove(chemin)
+                if cle not in crees:
+                    modifies.setdefault(cle, chemin)
+            elif cle in crees:  # créé puis supprimé dans la même tâche : il n'en reste rien
+                del crees[cle]
             else:
-                if chemin in modifies:
-                    modifies.remove(chemin)
-                if chemin not in supprimes:
-                    supprimes.append(chemin)
+                modifies.pop(cle, None)
+                supprimes.setdefault(cle, chemin)
         return {
-            "crees": crees,
-            "modifies": modifies,
-            "supprimes": supprimes,
+            "crees": list(crees.values()),
+            "modifies": list(modifies.values()),
+            "supprimes": list(supprimes.values()),
             "commandes": list(self.commandes),
             "verifications": self.verifications,
             "plan_inacheve": self.etapes_restantes(),

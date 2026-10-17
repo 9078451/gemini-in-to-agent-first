@@ -1,11 +1,12 @@
 from pathlib import Path
 
+from cowork import instructions
 from cowork.catalogue import CATALOGUE
 from cowork.instructions import arborescence, cadre
 
 
 def un_cadre(**options):
-    reglages = dict(contenu="a.txt", processus="", derniere_tache="", reponse=False, max_actions=10)
+    reglages = dict(contenu="a.txt", entrees="1", processus="", derniere_tache="", reponse=False, max_actions=10)
     reglages.update(options)
     return cadre(Path("C:/travail"), "crée a.txt", **reglages)
 
@@ -47,7 +48,12 @@ def test_cadre_contexte_vide_et_rempli():
     rempli = un_cadre(processus="#1 python server.py (since 10:52)", derniere_tache="done: page créée")
     assert "RUNNING PROCESSES: #1 python server.py (since 10:52)" in rempli
     assert "LAST TASK: done: page créée" in rempli
-    assert "FOLDER CONTENT:\na.txt" in rempli
+    assert "FOLDER CONTENT (1 entry):\na.txt" in rempli
+
+
+def test_cadre_compte_les_entrees():
+    assert "FOLDER CONTENT (37 entries):\na.txt" in un_cadre(entrees="37")
+    assert "FOLDER CONTENT (10150+ entries):\na.txt" in un_cadre(entrees="10150+")
 
 
 def test_arborescence(tmp_path):
@@ -57,18 +63,26 @@ def test_arborescence(tmp_path):
     for ignore in (".git", "node_modules", "__pycache__", ".venv", "venv"):
         (tmp_path / ignore).mkdir()
         (tmp_path / ignore / "x").write_text("x")
-    assert arborescence(tmp_path, 150) == "a/\n  b.txt\nc.py"
+    assert arborescence(tmp_path, 150) == ("a/\n  b.txt\nc.py", "3")
 
 
 def test_arborescence_limite(tmp_path):
     for i in range(200):
         (tmp_path / f"f{i:03}.txt").write_text("x")
-    texte = arborescence(tmp_path, 150)
-    assert len(texte.splitlines()) == 151 and texte.endswith("… (50 more)")
+    texte, entrees = arborescence(tmp_path, 150)
+    assert len(texte.splitlines()) == 151 and texte.endswith("… (50 more)") and entrees == "200"
+
+
+def test_arborescence_compte_arrete(tmp_path, monkeypatch):
+    monkeypatch.setattr(instructions, "_COMPTE_MAX", 5)
+    for i in range(20):
+        (tmp_path / f"f{i:02}.txt").write_text("x")
+    texte, entrees = arborescence(tmp_path, 10)
+    assert texte.endswith("… (5+ more)") and entrees == "15+"
 
 
 def test_arborescence_vide(tmp_path):
-    assert arborescence(tmp_path, 150) == "(empty)"
+    assert arborescence(tmp_path, 150) == ("(empty)", "0")
 
 
 def test_arborescence_boucle_de_jonction(tmp_path):
@@ -78,5 +92,5 @@ def test_arborescence_boucle_de_jonction(tmp_path):
     (tmp_path / "a").mkdir()
     (tmp_path / "a" / "f.txt").write_text("x")
     _winapi.CreateJunction(str(tmp_path / "a"), str(tmp_path / "a" / "boucle"))
-    texte = arborescence(tmp_path, 150)  # ne doit pas finir en RecursionError
+    texte, _ = arborescence(tmp_path, 150)  # ne doit pas finir en RecursionError
     assert texte.startswith("a/\n  boucle/")

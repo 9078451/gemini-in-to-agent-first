@@ -102,6 +102,8 @@ class ServiceCowork:
     def demarrer(
         self, conversation_id: str, dossier: str, adresse: str | None, texte: str, modele, niveau
     ) -> None:
+        """Lance la tâche et enregistre le message de l'utilisateur, une fois la conversation
+        réservée : refusé (TacheEnCours), il ne laisse rien dans l'historique."""
         with self._verrou:
             ancienne = self._sessions.get(conversation_id)
             if ancienne is not None and not ancienne.fini:
@@ -110,15 +112,10 @@ class ServiceCowork:
             self._sessions[conversation_id] = session
             self._ranger()
         try:
-            dossier_travail = Path(dossier)
-            processus = self._processus_de(conversation_id, dossier_travail)
-            executeur = self._fabrique_executeur(dossier_travail, processus, session.arret)
-            session.tache, message = self._preparer(conversation_id, dossier_travail, texte, processus)
-        except Exception as e:  # sans cela, la conversation restait « en cours » (409) jusqu'au redémarrage
-            journal.exception("Tâche Cowork impossible à préparer")
-            self._emettre(conversation_id, session, {"type": "erreur", "corps": f"Impossible de préparer la tâche : {e}"})
-            self._finir(session)
-            return
+            self._historique.ajouter_message(conversation_id, "toi", texte)
+        except Exception:
+            self._finir(session)  # conversation supprimée entre-temps : rien à lancer
+            raise
         self._emettre(conversation_id, session, {"type": "statut", "statut": "queued"})
 
         def travail(pilote) -> None:
@@ -134,6 +131,18 @@ class ServiceCowork:
                 return resultat.reponse
 
             self._emettre(conversation_id, session, {"type": "statut", "statut": "running"})
+            try:
+                # Préparée à son début réel, pas à sa mise en file : la tâche a pu attendre son
+                # tour derrière une autre, le dossier et les processus ont pu changer entre-temps.
+                dossier_travail = Path(dossier)
+                processus = self._processus_de(conversation_id, dossier_travail)
+                executeur = self._fabrique_executeur(dossier_travail, processus, session.arret)
+                session.tache, message = self._preparer(conversation_id, dossier_travail, texte, processus)
+            except Exception as e:  # sans cela, la conversation restait « en cours » (409) jusqu'au redémarrage
+                journal.exception("Tâche Cowork impossible à préparer")
+                self._emettre(conversation_id, session, {"type": "erreur", "corps": f"Impossible de préparer la tâche : {e}"})
+                self._finir(session)
+                return
             try:
                 executer_tache(
                     message,
@@ -166,10 +175,12 @@ class ServiceCowork:
         pause = self._historique.derniere_etape(conversation_id, PAUSES)
         reprise = pause is not None and pause["type"] == "question"
         tache = EtatTache.depuis_dict(pause.get("tache", {})) if reprise else EtatTache()
+        contenu, entrees = arborescence(dossier, self._max_entrees)
         message = cadre(
             dossier,
             texte,
-            contenu=arborescence(dossier, self._max_entrees),
+            contenu=contenu,
+            entrees=entrees,
             processus=_processus_actifs(processus.liste()),
             derniere_tache=_derniere_tache(self._historique.derniere_etape(conversation_id, FINS)),
             reponse=reprise,
@@ -283,7 +294,23 @@ class ServiceCowork:
             return Resultat(False, f"no process #{numero}")
         return gestionnaire.arreter(numero)
 
+    def oublier(self, conversation_id: str) -> None:
+        """La conversation est supprimée : sa tâche et ses processus s'arrêtent (plus rien ne
+        les montre dans l'app), ses autorisations « toujours » sont oubliées."""
+        self.arreter(conversation_id)
+        with self._verrou:
+            gestionnaire = self._processus.pop(conversation_id, None)
+            self._toujours.pop(conversation_id, None)
+        if gestionnaire is not None:
+            gestionnaire.arreter_tout()
+
     def arreter_tout(self) -> None:
+        """Agent First s'arrête : les tâches d'abord (sinon l'une d'elles pourrait encore
+        lancer un serveur qui survivrait), puis les processus."""
+        for conversation_id, session in list(self._sessions.items()):
+            if not session.fini:
+                session.raison_arret = session.raison_arret or "Agent First s'est arrêté"
+                self.arreter(conversation_id)
         for gestionnaire in list(self._processus.values()):
             gestionnaire.arreter_tout()
 

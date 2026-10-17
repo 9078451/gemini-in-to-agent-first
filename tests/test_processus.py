@@ -1,14 +1,33 @@
+import os
+import re
+import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
-from cowork.actions import Executeur
+from cowork.actions import Executeur, tuer_arbre
 from cowork.format import Action
 from cowork.processus import GestionnaireProcessus
 
 PRET_PUIS_DORT = "import time; print('pret', flush=True); time.sleep(30)"
 DORT = "import time; time.sleep(30)"
+RACINE = Path(__file__).resolve().parent.parent
+# Un Agent First qui lance un serveur (lui-même parent d'un autre processus) puis plante.
+AGENT_PLANTE = """
+import os, sys
+from pathlib import Path
+from cowork.processus import GestionnaireProcessus
+g = GestionnaireProcessus(Path(sys.argv[1]), 1, 2.0, 8000, commande=lambda texte: [sys.executable, "-c", texte])
+print(g.demarrer(sys.argv[2]).corps, flush=True)
+os._exit(1)  # planté : ni arreter_tout, ni finally
+"""
+AVEC_ENFANT = (
+    "import subprocess, sys, time; "
+    "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+    "print('enfant', p.pid, flush=True); time.sleep(60)"
+)
 
 
 @pytest.fixture
@@ -119,3 +138,38 @@ def test_sortie_d_un_print_sans_flush(tmp_path):
         assert "Serving on 8000" in r.corps
     finally:
         g.arreter_tout()
+
+
+def _vivant(pid: int) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    k = ctypes.WinDLL("kernel32")
+    k.OpenProcess.argtypes, k.OpenProcess.restype = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE
+    k.WaitForSingleObject.argtypes, k.WaitForSingleObject.restype = [wintypes.HANDLE, wintypes.DWORD], wintypes.DWORD
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    poignee = k.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if not poignee:
+        return False
+    try:
+        return k.WaitForSingleObject(poignee, 0) == 0x102  # WAIT_TIMEOUT : il tourne encore
+    finally:
+        k.CloseHandle(poignee)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Job Object : Windows seulement")
+def test_processus_meurent_avec_agent_first_meme_plante(tmp_path):
+    sortie = subprocess.run(
+        [sys.executable, "-c", AGENT_PLANTE, str(tmp_path), AVEC_ENFANT],
+        cwd=RACINE, capture_output=True, text=True, timeout=30,
+    ).stdout
+    pids = [int(n) for n in re.findall(r"(?:pid |enfant )(\d+)", sortie)]
+    assert len(pids) == 2, sortie
+    try:
+        fin = time.monotonic() + 5
+        while any(_vivant(pid) for pid in pids) and time.monotonic() < fin:
+            time.sleep(0.1)
+        assert not [pid for pid in pids if _vivant(pid)]
+    finally:
+        for pid in pids:
+            tuer_arbre(pid)

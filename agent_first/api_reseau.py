@@ -198,8 +198,7 @@ def creer_api_reseau(
         if cowork.en_cours(identifiant):
             raise HTTPException(409, "A task is already running in this conversation: wait for it or stop it.")
         conversation = historique.conversation(identifiant)
-        historique.ajouter_message(identifiant, "toi", texte)
-        try:
+        try:  # le service enregistre le message s'il accepte la tâche
             cowork.demarrer(identifiant, conversation.dossier, conversation.adresse, texte,
                             conversation.modele, conversation.niveau)
         except TacheEnCours:

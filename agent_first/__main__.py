@@ -110,7 +110,7 @@ def main() -> None:
     finally:
         if serveur_api is not None:
             serveur_api.should_exit = True
-        cowork.arreter_tout()  # les serveurs lancés par Cowork s'arrêtent avec Agent First
+        cowork.arreter_tout()  # les tâches, puis les serveurs qu'elles ont lancés
         file.arreter()
 
 

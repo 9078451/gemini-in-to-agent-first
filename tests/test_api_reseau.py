@@ -91,6 +91,34 @@ def test_models(monte):
     assert donnees["object"] == "list" and [m["id"] for m in donnees["data"]] == ["4 Argon", "3.1 Pro"]
 
 
+def test_models_sans_attendre_une_longue_tache(monte, tmp_path):
+    # Une tâche Cowork peut occuper Gemini des minutes : /v1/models répond tout de suite
+    # (liste par défaut) et ne met pas de lecture des modèles en file derrière elle.
+    client, pilote, *_ = monte([FINI])
+    lectures = []
+    pilote.lister_modes = lambda: lectures.append(1) or Modes([Option("5 Ultra", "")], [])
+    appele, libere = threading.Event(), threading.Event()
+    envoyer = pilote.envoyer
+
+    def lent(*args, **kwargs):
+        appele.set()
+        libere.wait(5)
+        return envoyer(*args, **kwargs)
+
+    pilote.envoyer = lent
+    identifiant = client.post("/v1/cowork", json={"folder": str(tmp_path), "request": "x"}).json()["id"]
+    assert appele.wait(5)
+    debut = time.monotonic()
+    try:
+        ids = [m["id"] for m in client.get("/v1/models").json()["data"]]
+        assert time.monotonic() - debut < 2 and ids == ["4 Argon", "3.1 Pro"]
+    finally:
+        libere.set()
+        evenements_sse(client.get(f"/v1/cowork/{identifiant}/events"))
+    assert lectures == []
+    assert [m["id"] for m in client.get("/v1/models").json()["data"]] == ["5 Ultra"]
+
+
 def test_chat_completion(monte):
     client, pilote, historique, _ = monte()
     r = client.post("/v1/chat/completions", json={"model": "4 Argon", "messages": [{"role": "user", "content": "Salut"}]})
@@ -186,6 +214,23 @@ def test_cowork_409_et_suite(monte, tmp_path):
     evenements_sse(client.get(f"/v1/cowork/{identifiant}/events"))
     r = client.post(f"/v1/cowork/{identifiant}/messages", json={"text": "recommence"})
     assert r.status_code == 200
+
+
+def test_cowork_message_refuse_pas_enregistre(monte, tmp_path):
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    client, _, historique, service = monte(['```json\n{"action": "delete", "path": "a.txt"}\n```'])
+    identifiant = client.post("/v1/cowork", json={"folder": str(tmp_path), "request": "supprime"}).json()["id"]
+    fin = time.monotonic() + 5
+    while client.get(f"/v1/cowork/{identifiant}").json()["status"] != "waiting_approval":
+        assert time.monotonic() < fin
+        time.sleep(0.05)
+    service.en_cours = lambda _identifiant: False  # la course : le contrôle passe, la réservation échoue
+    try:
+        assert client.post(f"/v1/cowork/{identifiant}/messages", json={"text": "encore"}).status_code == 409
+        assert [m.texte for m in historique.messages(identifiant) if m.role == "toi"] == ["supprime"]
+    finally:
+        client.post(f"/v1/cowork/{identifiant}/stop")
+        evenements_sse(client.get(f"/v1/cowork/{identifiant}/events"))
 
 
 def test_cowork_inconnu_404(monte):

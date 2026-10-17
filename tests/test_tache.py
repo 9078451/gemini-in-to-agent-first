@@ -1,3 +1,7 @@
+import os
+
+import pytest
+
 from cowork.catalogue import Action, Resultat
 from cowork.tache import EtatTache, lire_plan
 
@@ -35,6 +39,30 @@ def test_bilan_cree_puis_supprime_disparait():
     tache.noter(Action("delete", {"path": "c.py"}), Resultat(True, "", effet=("supprime", "c.py")))
     bilan = tache.bilan([])
     assert bilan["crees"] == [] and bilan["supprimes"] == ["c.py"]
+
+
+def test_bilan_meme_fichier_sous_plusieurs_ecritures():
+    tache = EtatTache()
+    creer(tache, "./src/a.py")
+    creer(tache, "src/a.py", "modifie")
+    creer(tache, "src//b.py", "modifie")
+    creer(tache, "src/./b.py", "modifie")
+    creer(tache, "c.py", "supprime")
+    creer(tache, "./c.py", "supprime")
+    bilan = tache.bilan([])
+    assert bilan["crees"] == ["src/a.py"] and bilan["modifies"] == ["src/b.py"] and bilan["supprimes"] == ["c.py"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="la casse ne compte pas sous Windows seulement")
+def test_bilan_casse_ignoree_sous_windows():
+    tache = EtatTache()
+    creer(tache, "A.py")
+    creer(tache, "a.py", "modifie")
+    creer(tache, "a.PY", "supprime")
+    creer(tache, "B.py", "modifie")
+    creer(tache, "b.py", "modifie")
+    bilan = tache.bilan([])
+    assert bilan["crees"] == [] and bilan["modifies"] == ["B.py"] and bilan["supprimes"] == []
 
 
 def test_bilan_commandes_plan_processus():
