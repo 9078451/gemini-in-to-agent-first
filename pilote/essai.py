@@ -10,7 +10,7 @@ import argparse
 import sys
 
 import config
-from pilote.chrome import ChromeDedie
+from pilote.chrome import ONGLET_COWORK, ChromeDedie, OngletGemini
 from pilote.erreurs import ErreurPilote
 from pilote.gemini import PiloteGemini
 
@@ -27,8 +27,9 @@ def main() -> int:
     args = parser.parse_args()
 
     chrome = ChromeDedie(config.CHEMIN_CHROME, config.DOSSIER_PROFIL, config.PORT_CHROME, config.URL_GEMINI)
+    onglet = OngletGemini(chrome, ONGLET_COWORK, principal=True)
     pilote = PiloteGemini(
-        chrome, config.URL_GEMINI, config.DELAI_REPONSE, config.STABILITE, config.DOSSIER_JOURNAUX
+        onglet, config.URL_GEMINI, config.DELAI_REPONSE, config.STABILITE, config.DOSSIER_JOURNAUX
     )
     try:
         resultat = pilote.envoyer(args.suite, args.texte.replace("\\n", "\n"), args.modele, args.niveau)
@@ -36,7 +37,7 @@ def main() -> int:
         print(f"ERREUR : {e}", file=sys.stderr)
         return 1
     finally:
-        chrome.fermer()
+        onglet.fermer()
     print(resultat.reponse)
     if args.html:
         print("\n--- HTML ---\n" + resultat.html)

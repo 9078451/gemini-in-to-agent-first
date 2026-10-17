@@ -1,7 +1,9 @@
-"""Un seul Chrome : les demandes passent une par une, dans un fil dédié.
+"""Un onglet Gemini : ses demandes passent une par une, dans un fil dédié.
 
 Playwright (mode synchrone) doit être utilisé depuis le fil qui l'a créé :
 le pilote est donc fabriqué et utilisé uniquement dans le fil de la file.
+Agent First en a deux, qui tournent en même temps : une pour Cowork, une pour
+le Chat et l'API (chacune son onglet du Chrome dédié).
 """
 import logging
 import queue
@@ -29,13 +31,13 @@ def rechauffer(file: "FileAttente") -> Future:
 
 
 class FileAttente:
-    def __init__(self, fabrique_pilote: Callable[[], Pilote]) -> None:
+    def __init__(self, fabrique_pilote: Callable[[], Pilote], nom: str = "file-gemini") -> None:
         self._fabrique = fabrique_pilote
         self._pilote: Pilote | None = None
         self._taches: queue.Queue = queue.Queue()
         self._en_attente = 0  # demandes soumises pas encore terminées
         self._verrou = threading.Lock()
-        self._fil = threading.Thread(target=self._boucle, name="file-gemini", daemon=True)
+        self._fil = threading.Thread(target=self._boucle, name=nom, daemon=True)
 
     def demarrer(self) -> None:
         self._fil.start()

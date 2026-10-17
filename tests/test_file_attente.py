@@ -116,3 +116,28 @@ def test_rechauffer_en_echec_n_empeche_rien():
         rechauffer(f).result(timeout=5)
     assert f.soumettre(lambda p: "ensuite").result(timeout=5) == "ensuite"
     f.arreter()
+
+
+def test_nom_du_fil_au_choix():
+    noms = []
+    f = FileAttente(lambda: noms.append(threading.current_thread().name) or FauxPilote(), nom="file-gemini-chat")
+    f.demarrer()
+    f.soumettre(lambda p: p.travailler(0)).result(timeout=5)
+    f.arreter()
+    assert noms == ["file-gemini-chat"]
+
+
+def test_deux_files_tournent_en_meme_temps():
+    # Cowork occupe sa file des minutes : celle du Chat répond pendant ce temps.
+    cowork, chat = FileAttente(FauxPilote, nom="cowork"), FileAttente(FauxPilote, nom="chat")
+    cowork.demarrer()
+    chat.demarrer()
+    libere = threading.Event()
+    try:
+        tache = cowork.soumettre(lambda p: libere.wait(5))
+        assert chat.soumettre(lambda p: p.travailler(0)).result(timeout=2) == "fait"
+        assert not tache.done()
+    finally:
+        libere.set()
+        cowork.arreter()
+        chat.arreter()

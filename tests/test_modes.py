@@ -35,3 +35,57 @@ def test_option_libre():
 def test_message_choix_bloque():
     message = str(ChoixBloque("3.8 Flash", "16 oct., 14:58"))
     assert "3.8 Flash" in message and "16 oct., 14:58" in message and "limite" in message
+
+
+# ---- ouvrir le sélecteur ----------------------------------------------------
+# Juste après le chargement d'une nouvelle discussion, Gemini ignore le premier
+# clic sur le sélecteur (vu en essai réel) : le menu reste fermé.
+
+import pytest  # noqa: E402
+from playwright.sync_api import TimeoutError as DelaiPlaywright  # noqa: E402
+
+from pilote.erreurs import ErreurPilote  # noqa: E402
+from pilote.modes import _ouvrir  # noqa: E402
+from pilote.selecteurs import OPTION_MODELE  # noqa: E402
+
+
+class PageMenuLent:
+    """Le menu ne s'ouvre qu'au clic n° `clics_ignores + 1`."""
+
+    def __init__(self, clics_ignores):
+        self.clics = 0
+        self.clics_ignores = clics_ignores
+
+    def locator(self, selecteur):
+        return ElementMenu(self, selecteur)
+
+
+class ElementMenu:
+    def __init__(self, page, selecteur):
+        self._page, self._selecteur = page, selecteur
+
+    def count(self):
+        return 1
+
+    @property
+    def first(self):
+        return self
+
+    def click(self):
+        self._page.clics += 1
+
+    def wait_for(self, state, timeout):
+        assert self._selecteur == OPTION_MODELE and state == "visible"
+        if self._page.clics <= self._page.clics_ignores:
+            raise DelaiPlaywright("menu fermé")
+
+
+def test_menu_reclique_si_le_premier_clic_est_ignore():
+    page = PageMenuLent(clics_ignores=1)
+    _ouvrir(page)
+    assert page.clics == 2
+
+
+def test_menu_qui_ne_s_ouvre_jamais_erreur_claire():
+    with pytest.raises(ErreurPilote, match="menu des modèles"):
+        _ouvrir(PageMenuLent(clics_ignores=float("inf")), delai=0.05)

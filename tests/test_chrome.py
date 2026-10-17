@@ -29,3 +29,167 @@ def test_commande_n_ouvre_pas_le_port_sur_le_reseau():
 
 def test_est_lance_faux_si_personne_n_ecoute():
     assert nouveau_chrome(port_libre()).est_lance() is False
+
+
+def test_commande_garde_les_fenetres_cachees_actives():
+    # Une fenêtre du Chrome dédié cachée derrière l'app doit continuer d'écrire la réponse.
+    commande = nouveau_chrome().commande_lancement()
+    for drapeau in (
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-background-timer-throttling",
+    ):
+        assert drapeau in commande
+
+
+def test_deux_fils_qui_lancent_chrome_n_en_ouvrent_qu_un(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from pilote import chrome as module
+
+    lances = []
+    monkeypatch.setattr(module.subprocess, "Popen", lambda commande: lances.append(commande))
+    chrome = ChromeDedie(Path("C:/chrome.exe"), tmp_path / "profil", 9222, "https://gemini.google.com/app")
+    monkeypatch.setattr(chrome, "est_lance", lambda: bool(lances) and time.sleep(0.2) is None)
+    depart = threading.Barrier(2)
+
+    def lancer():
+        depart.wait()
+        chrome.lancer(delai=5)
+
+    fils = [threading.Thread(target=lancer) for _ in range(2)]
+    for fil in fils:
+        fil.start()
+    for fil in fils:
+        fil.join(timeout=10)
+    assert len(lances) == 1
+
+
+# ---- OngletGemini : un fil, une connexion, son onglet ----------------------
+
+from contextlib import contextmanager  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from pilote.chrome import CLE_ONGLET, ECRIRE_MARQUE, LIRE_MARQUE, OngletGemini  # noqa: E402
+
+GEMINI = "https://gemini.google.com/app"
+
+
+class FaussePage:
+    def __init__(self, url, marque=None):
+        self.url = url
+        self.stockage = {} if marque is None else {CLE_ONGLET: marque}
+        self.fermee = False
+        self.lectures = 0
+
+    def evaluate(self, script, argument=None):
+        if script == LIRE_MARQUE:
+            self.lectures += 1
+            return self.stockage.get(argument)
+        if script == ECRIRE_MARQUE:
+            self.stockage[argument[0]] = argument[1]
+            return None
+        raise AssertionError(f"script inattendu : {script}")
+
+    def is_closed(self):
+        return self.fermee
+
+    def wait_for_load_state(self, *_args, **_kwargs):
+        pass
+
+    @property
+    def marque(self):
+        return self.stockage.get(CLE_ONGLET)
+
+
+class FauxContexte:
+    def __init__(self, pages):
+        self.toutes = list(pages)
+
+    @property
+    def pages(self):  # comme Playwright : les onglets fermés n'y sont plus
+        return [p for p in self.toutes if not p.is_closed()]
+
+    @contextmanager
+    def expect_page(self):
+        attente = SimpleNamespace(value=None)
+        yield attente
+        attente.value = self.toutes[-1]
+
+
+class FauxNavigateur:
+    def __init__(self, pages):
+        self.contexts = [FauxContexte(pages)]
+        self.fenetres = []  # paramètres de chaque Target.createTarget
+
+    def is_connected(self):
+        return True
+
+    def new_browser_cdp_session(self):
+        navigateur = self
+
+        class Session:
+            def send(self, methode, parametres):
+                assert methode == "Target.createTarget"
+                navigateur.fenetres.append(parametres)
+                navigateur.contexts[0].toutes.append(FaussePage(parametres["url"]))
+                return {"targetId": "nouvel-onglet"}
+
+            def detach(self):
+                pass
+
+        return Session()
+
+
+class OngletBranche(OngletGemini):
+    """OngletGemini branché sur un faux navigateur au lieu du vrai Chrome."""
+
+    def __init__(self, navigateur, role, principal=False):
+        super().__init__(nouveau_chrome(), role, principal=principal)
+        self._faux = navigateur
+
+    def _brancher(self):
+        return self._faux
+
+
+def test_cowork_prend_l_onglet_gemini_ouvert_et_le_marque():
+    onglets = [FaussePage("chrome://newtab/"), FaussePage(GEMINI)]
+    navigateur = FauxNavigateur(onglets)
+    assert OngletBranche(navigateur, "cowork", principal=True).page() is onglets[1]
+    assert onglets[1].marque == "cowork" and navigateur.fenetres == []
+
+
+def test_chat_ouvre_sa_propre_fenetre():
+    # Dans la même fenêtre, l'onglet de derrière bute (menu fermé, texte figé) : vu en essai réel.
+    gemini = FaussePage(GEMINI)
+    navigateur = FauxNavigateur([gemini])
+    page = OngletBranche(navigateur, "chat").page()
+    assert page is not gemini and page.marque == "chat" and gemini.marque is None
+    assert navigateur.fenetres == [{"url": GEMINI, "newWindow": True}]
+
+
+def test_onglets_marques_retrouves_apres_un_redemarrage():
+    chat, cowork = FaussePage(GEMINI + "/a", "chat"), FaussePage(GEMINI + "/b", "cowork")
+    navigateur = FauxNavigateur([chat, cowork])
+    assert OngletBranche(navigateur, "cowork", principal=True).page() is cowork
+    assert OngletBranche(navigateur, "chat").page() is chat
+    assert navigateur.fenetres == []
+
+
+def test_cowork_ne_prend_jamais_l_onglet_du_chat():
+    chat = FaussePage(GEMINI, "chat")
+    navigateur = FauxNavigateur([chat])
+    page = OngletBranche(navigateur, "cowork", principal=True).page()
+    assert page is not chat and page.marque == "cowork" and chat.marque == "chat"
+
+
+def test_onglet_garde_tant_qu_il_reste_ouvert():
+    gemini = FaussePage(GEMINI)
+    navigateur = FauxNavigateur([gemini])
+    onglet = OngletBranche(navigateur, "cowork", principal=True)
+    assert onglet.page() is gemini and onglet.page() is gemini
+    assert gemini.lectures == 1  # pas de nouvelle recherche à chaque message
+    gemini.fermee = True  # fenêtre fermée par l'utilisateur
+    nouvelle = onglet.page()
+    assert nouvelle is not gemini and nouvelle.marque == "cowork"

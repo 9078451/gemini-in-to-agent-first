@@ -1,5 +1,6 @@
 """Taper un message dans Gemini, attendre la fin de la réponse et la lire."""
 import logging
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -9,7 +10,7 @@ from playwright.sync_api import Locator, Page
 
 from pilote import modes
 from pilote.attente import attendre_envoi, attendre_fin_reponse, attendre_nouvelle_reponse
-from pilote.chrome import ChromeDedie
+from pilote.chrome import OngletGemini
 from pilote.erreurs import DelaiDepasse, ErreurPilote, PasConnecteGoogle, RepereIntrouvable, VerificationGoogle
 from pilote.modeles import Modes, ResultatGemini
 from pilote.reperes import attendre_repere, compter, premier_present
@@ -50,23 +51,46 @@ def nouvelle_discussion_prete(url_actuelle: str, url_nouvelle: str, questions_af
     return url_actuelle.rstrip("/") == url_nouvelle.rstrip("/") and questions_affichees == 0
 
 
+class ReglagesCompte:
+    """Le modèle et le niveau choisis valent pour tout le compte Google : une nouvelle
+    discussion les reprend, dans n'importe quel onglet (vu en essai réel). Les pilotes
+    d'un même compte notent ici chaque changement ; celui dont l'autre a changé les
+    réglages depuis sa dernière lecture relit le sélecteur avant d'envoyer."""
+
+    def __init__(self) -> None:
+        self._version = 0
+        self._verrou = threading.Lock()
+
+    def version(self) -> int:
+        with self._verrou:
+            return self._version
+
+    def changer(self) -> int:
+        with self._verrou:
+            self._version += 1
+            return self._version
+
+
 class PiloteGemini:
     def __init__(
         self,
-        chrome: ChromeDedie,
+        onglet: OngletGemini,
         url_nouvelle: str,
         delai_reponse: float,
         stabilite: float,
         dossier_captures: Path,
+        reglages: "ReglagesCompte | None" = None,
     ) -> None:
-        self._chrome = chrome
+        self._onglet = onglet
         self._url_nouvelle = url_nouvelle
         self._delai_reponse = delai_reponse
         self._stabilite = stabilite
         self._dossier_captures = dossier_captures
-        # Derniers réglages connus du sélecteur de Gemini.
+        # Derniers réglages connus du sélecteur de Gemini, et la version du compte où ils valaient.
         self._modele: str | None = None
         self._niveau: str | None = None
+        self._reglages = reglages or ReglagesCompte()
+        self._version = self._reglages.version()
 
     def envoyer(
         self,
@@ -79,7 +103,7 @@ class PiloteGemini:
         """Envoie `texte` dans la conversation `adresse` (None = nouvelle conversation),
         après avoir réglé le modèle et le niveau demandés. `delai` remplace, pour ce
         message, la limite de temps de réponse par défaut."""
-        page = self._chrome.page()
+        page = self._onglet.page()
         try:
             return self._envoyer(page, adresse, texte, modele, niveau, delai or self._delai_reponse)
         except RepereIntrouvable as e:
@@ -88,20 +112,21 @@ class PiloteGemini:
     def preparer(self) -> None:
         """Ouvre Chrome et une nouvelle discussion Gemini, prête à recevoir un message
         (appelé au démarrage d'Agent First : le premier message n'attend plus Chrome)."""
-        page = self._chrome.page()
+        page = self._onglet.page()
         if not nouvelle_discussion_prete(page.url, self._url_nouvelle, compter(page, "question")):
             page.goto(self._url_nouvelle, wait_until="domcontentloaded")
         self._verifier_acces(page)
         attendre_repere(page, "champ_saisie", 30)
 
     def est_connecte(self) -> bool:
-        return not self._demande_connexion(self._chrome.page())
+        return not self._demande_connexion(self._onglet.page())
 
     def lister_modes(self) -> Modes:
-        page = self._chrome.page()
+        page = self._onglet.page()
         attendre_repere(page, "bouton_mode", 15)
+        version = self._reglages.version()
         lus = modes.lire_modes(page)
-        self._modele, self._niveau = lus.modele_actif, lus.niveau_actif
+        self._modele, self._niveau, self._version = lus.modele_actif, lus.niveau_actif, version
         return lus
 
     def _envoyer(
@@ -122,12 +147,7 @@ class PiloteGemini:
             self._verifier_acces(page)
             raise
         self._verifier_acces(page)
-        if ouverte and (modele or niveau):
-            # Ouvrir une conversation remet le sélecteur sur SES réglages (souvent Max.) :
-            # les derniers réglages connus ne valent plus, on relit les vrais.
-            lus = modes.lire_modes(page)
-            self._modele, self._niveau = lus.modele_actif, lus.niveau_actif
-        self._regler(page, modele, niveau)
+        self._ajuster(page, ouverte, modele, niveau)
 
         nb_avant = compter(page, "reponse")
         questions_avant = compter(page, "question")
@@ -173,6 +193,18 @@ class PiloteGemini:
             duree=round(time.monotonic() - debut, 1),
         )
 
+    def _ajuster(self, page: Page, ouverte: bool, modele: str | None, niveau: str | None) -> None:
+        """Règle le modèle et le niveau demandés. Les derniers réglages connus sont relus
+        d'abord quand ils ne valent plus : une conversation rouverte remet le sélecteur sur
+        SES réglages (souvent Max.), et l'autre onglet a pu changer ceux du compte."""
+        if modele is None and niveau is None:
+            return
+        version = self._reglages.version()
+        if ouverte or version != self._version:
+            lus = modes.lire_modes(page)
+            self._modele, self._niveau, self._version = lus.modele_actif, lus.niveau_actif, version
+        self._regler(page, modele, niveau)
+
     def _regler(self, page: Page, modele: str | None, niveau: str | None) -> None:
         changer_modele, changer_niveau = reglages_a_faire(self._modele, self._niveau, modele, niveau)
         if changer_modele:
@@ -180,6 +212,8 @@ class PiloteGemini:
             self._modele = modele
         if changer_niveau:
             self._niveau = niveau if modes.choisir_niveau(page, niveau) else None
+        if changer_modele or changer_niveau:
+            self._version = self._reglages.changer()  # l'autre onglet relira avant d'envoyer
 
     def _html(self, reponse: Locator) -> str:
         try:

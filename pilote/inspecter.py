@@ -8,7 +8,7 @@ import argparse
 import sys
 
 import config
-from pilote.chrome import ChromeDedie
+from pilote.chrome import ONGLET_COWORK, ChromeDedie, OngletGemini
 from pilote.selecteurs import REPERES
 
 
@@ -19,8 +19,9 @@ def main() -> None:
     args = parser.parse_args()
 
     chrome = ChromeDedie(config.CHEMIN_CHROME, config.DOSSIER_PROFIL, config.PORT_CHROME, config.URL_GEMINI)
+    onglet = OngletGemini(chrome, ONGLET_COWORK, principal=True)
     try:
-        page = chrome.page()
+        page = onglet.page()
         print(f"Page : {page.url}\n")
         if args.html:
             elements = page.locator(args.html)
@@ -34,7 +35,7 @@ def main() -> None:
             for selecteur in candidats:
                 print(f"  {page.locator(selecteur).count():>3}  {selecteur}")
     finally:
-        chrome.fermer()
+        onglet.fermer()
 
 
 if __name__ == "__main__":

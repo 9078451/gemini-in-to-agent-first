@@ -20,7 +20,7 @@ from agent_first.serveur import creer_app
 from cowork.actions import Executeur
 from cowork.boucle import Reglages
 from cowork.processus import GestionnaireProcessus
-from pilote.chrome import ChromeDedie
+from pilote.chrome import ONGLET_COWORK, ChromeDedie, OngletGemini
 from pilote.gemini import PiloteGemini
 from pilote.modeles import Modes, Option
 
@@ -39,13 +39,14 @@ def main() -> None:
             logging.StreamHandler(),
         ],
     )
-    # est_lance() est appelé depuis les fils du serveur ; page() seulement
+    # est_lance() est appelé depuis les fils du serveur ; l'onglet (page) seulement
     # depuis le fil de la file d'attente (via le pilote).
     chrome = ChromeDedie(config.CHEMIN_CHROME, config.DOSSIER_PROFIL, config.PORT_CHROME, config.URL_GEMINI)
 
     def fabrique_pilote() -> PiloteGemini:
         return PiloteGemini(
-            chrome, config.URL_GEMINI, config.DELAI_REPONSE, config.STABILITE, config.DOSSIER_JOURNAUX
+            OngletGemini(chrome, ONGLET_COWORK, principal=True),
+            config.URL_GEMINI, config.DELAI_REPONSE, config.STABILITE, config.DOSSIER_JOURNAUX,
         )
 
     file = FileAttente(fabrique_pilote)

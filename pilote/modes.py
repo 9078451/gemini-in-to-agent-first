@@ -96,9 +96,19 @@ def choisir_niveau(page: Page, nom: str) -> bool:
     return True
 
 
-def _ouvrir(page: Page) -> None:
-    attendre_repere(page, "bouton_mode", 10).first.click()
-    page.locator(OPTION_MODELE).first.wait_for(state="visible", timeout=5000)
+def _ouvrir(page: Page, delai: float = 10.0) -> None:
+    """Ouvre le sélecteur. Juste après le chargement d'une discussion, Gemini ignore le
+    premier clic (vu en essai réel) : on reclique tant que le menu reste fermé."""
+    bouton = attendre_repere(page, "bouton_mode", 10).first
+    fin = time.monotonic() + delai
+    while True:
+        bouton.click()
+        try:
+            page.locator(OPTION_MODELE).first.wait_for(state="visible", timeout=2000)
+            return
+        except DelaiPlaywright as e:
+            if time.monotonic() >= fin:
+                raise ErreurPilote("Le menu des modèles de Gemini ne s'ouvre pas : renvoie ton message.") from e
 
 
 def _verifier_libre(page: Page, nom: str, modele: bool) -> None:
@@ -155,7 +165,7 @@ def _ouvrir_niveaux(page: Page) -> bool:
 
 def main() -> int:
     import config
-    from pilote.chrome import ChromeDedie
+    from pilote.chrome import ONGLET_COWORK, ChromeDedie, OngletGemini
 
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
@@ -165,8 +175,9 @@ def main() -> int:
     args = parser.parse_args()
 
     chrome = ChromeDedie(config.CHEMIN_CHROME, config.DOSSIER_PROFIL, config.PORT_CHROME, config.URL_GEMINI)
+    onglet = OngletGemini(chrome, ONGLET_COWORK, principal=True)
     try:
-        page = chrome.page()
+        page = onglet.page()
         attendre_repere(page, "bouton_mode", 15)
         if args.modele:
             choisir_modele(page, args.modele)
@@ -177,7 +188,7 @@ def main() -> int:
         print(f"ERREUR : {e}", file=sys.stderr)
         return 1
     finally:
-        chrome.fermer()
+        onglet.fermer()
     for titre, options in (("Modèles", modes.modeles), ("Niveaux de réflexion", modes.niveaux)):
         print(titre)
         for o in options:
