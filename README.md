@@ -93,6 +93,9 @@ curl -H "Authorization: Bearer <clé>" -H "Content-Type: application/json" ^
 | `POST /v1/cowork/{id}/messages` `{text}` | nouvelle demande, ou réponse à une question |
 | `POST /v1/cowork/{id}/stop` | arrête la tâche |
 
+Sans `reasoning_effort`, une tâche Cowork utilise le niveau par défaut de l'app
+(Min.) : avec « Max. », Gemini peut abandonner une longue demande sans répondre.
+
 Les conversations de l'API apparaissent dans l'historique de l'app (marquées
 « api »), et une demande d'accord s'y signale aussi. Désactiver l'API :
 `API_ACTIVE = False` dans `config.py`. **Quiconque a la clé peut faire agir

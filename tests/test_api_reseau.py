@@ -59,7 +59,8 @@ def monte(tmp_path):
             lambda dossier, au_changement: GestionnaireProcessus(dossier, 3, 0.3, 8000, au_changement=au_changement),
         )
         garde = GardeCle(tmp_path / "cle.txt")
-        api = creer_api_reseau(file, historique, service, garde, CacheModes(file, lambda: True, PAR_DEFAUT), 2.0)
+        api = creer_api_reseau(file, historique, service, garde, CacheModes(file, lambda: True, PAR_DEFAUT), 2.0,
+                               niveau_cowork="Min.")
         client = TestClient(api, headers={"Authorization": f"Bearer {garde.cle}"})
         montes.append(file)
         return client, pilote, historique, service
@@ -218,3 +219,13 @@ def test_route_inconnue_erreur_au_format_openai(monte):
     client, *_ = monte()
     r = client.get("/v1/inexistante")
     assert r.status_code == 404 and "error" in r.json()
+
+
+def test_cowork_niveau_par_defaut_min(monte, tmp_path):
+    # Trouvé en essai réel : sans niveau, Gemini gardait « Max. » et abandonnait la longue demande Cowork.
+    client, _, historique, _ = monte([FINI, FINI])
+    sans = client.post("/v1/cowork", json={"folder": str(tmp_path), "request": "x"}).json()["id"]
+    assert historique.conversation(sans).niveau == "Min."
+    evenements_sse(client.get(f"/v1/cowork/{sans}/events"))
+    avec = client.post("/v1/cowork", json={"folder": str(tmp_path), "request": "x", "reasoning_effort": "high"}).json()["id"]
+    assert historique.conversation(avec).niveau == "Max."

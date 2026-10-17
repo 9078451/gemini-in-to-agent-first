@@ -81,6 +81,7 @@ def creer_api_reseau(
     garde: GardeCle,
     modes: CacheModes,
     delai: float,
+    niveau_cowork: str | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Agent First — API réseau",
@@ -178,7 +179,9 @@ def creer_api_reseau(
         refus = _dossier_refuse(demande.folder)
         if refus:
             raise HTTPException(400, refus)
-        niveau = niveau_depuis_effort(demande.reasoning_effort)
+        # Sans niveau demandé : celui de l'app (Min.). Gemini garderait son réglage, souvent « Max. »,
+        # qui abandonne une longue demande Cowork sans répondre (vu en essai réel).
+        niveau = niveau_depuis_effort(demande.reasoning_effort) or niveau_cowork
         modele = demande.model if demande.model and demande.model != MODELE_PAR_DEFAUT else None
         dossier = str(Path(demande.folder).resolve())
         conversation = historique.creer(modele, niveau, "cowork", dossier, source="api")
