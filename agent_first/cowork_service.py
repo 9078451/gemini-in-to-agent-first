@@ -294,6 +294,16 @@ class ServiceCowork:
             return Resultat(False, f"no process #{numero}")
         return gestionnaire.arreter(numero)
 
+    def oublier(self, conversation_id: str) -> None:
+        """La conversation est supprimée : sa tâche et ses processus s'arrêtent (plus rien ne
+        les montre dans l'app), ses autorisations « toujours » sont oubliées."""
+        self.arreter(conversation_id)
+        with self._verrou:
+            gestionnaire = self._processus.pop(conversation_id, None)
+            self._toujours.pop(conversation_id, None)
+        if gestionnaire is not None:
+            gestionnaire.arreter_tout()
+
     def arreter_tout(self) -> None:
         """Agent First s'arrête : les tâches d'abord (sinon l'une d'elles pourrait encore
         lancer un serveur qui survivrait), puis les processus."""

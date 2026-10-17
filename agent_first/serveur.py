@@ -201,6 +201,8 @@ def creer_app(
             historique.supprimer(identifiant)
         except ConversationInconnue:
             return erreur(404, INCONNUE)
+        if cowork is not None:
+            cowork.oublier(identifiant)
         return {"supprimee": True}
 
     @app.post("/api/conversations/{identifiant}/messages")

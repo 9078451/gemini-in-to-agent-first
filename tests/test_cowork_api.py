@@ -376,6 +376,50 @@ def test_arreter_tout_arrete_d_abord_la_tache(tmp_path):
         file.arreter()
 
 
+def test_supprimer_la_conversation_arrete_ses_processus_et_oublie_ses_accords(tmp_path):
+    # Supprimée, la conversation n'a plus d'en-tête dans l'app : ses serveurs ne doivent pas
+    # tourner jusqu'à la fermeture d'Agent First, ni ses « toujours autoriser » rester en mémoire.
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    reponses = [bloc({"action": "start", "command": "python serveur.py"}, {"action": "delete", "path": "a.txt"}), FINI]
+    client, file, historique, service = monter(tmp_path, reponses)
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    collectes = []
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "lance et supprime"})
+    fil = threading.Thread(target=drainer_dans, args=(service, conv.id, collectes))
+    fil.start()
+    demande = attendre(collectes, "demande")
+    client.post(f"/api/cowork/{conv.id}/decision", json={"etape": demande["etape"], "reponse": "continuer", "toujours": True})
+    fil.join(timeout=5)
+    gestionnaire = service._processus[conv.id]
+    try:
+        assert [p["actif"] for p in gestionnaire.liste()] == [True] and conv.id in service._toujours
+        assert client.delete(f"/api/conversations/{conv.id}").status_code == 200
+        assert [p["actif"] for p in gestionnaire.liste()] == [False]
+        assert conv.id not in service._processus and conv.id not in service._toujours
+    finally:
+        gestionnaire.arreter_tout()
+        file.arreter()
+
+
+def test_supprimer_la_conversation_arrete_sa_tache(tmp_path):
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    client, file, historique, service = monter(tmp_path, [bloc({"action": "delete", "path": "a.txt"})])
+    conv = historique.creer(mode="cowork", dossier=str(tmp_path))
+    collectes = []
+    client.post(f"/api/cowork/{conv.id}/messages", json={"texte": "supprime"})
+    fil = threading.Thread(target=drainer_dans, args=(service, conv.id, collectes))
+    fil.start()
+    attendre(collectes, "demande")
+    try:
+        client.delete(f"/api/conversations/{conv.id}")
+        attendre(collectes, "arret")
+    finally:
+        service.arreter(conv.id)
+        fil.join(timeout=5)
+        file.arreter()
+    assert (tmp_path / "a.txt").exists()
+
+
 def test_processus_dans_le_cadre_suivant(tmp_path):
     pilote = FauxPilote([bloc({"action": "start", "command": "python serveur.py"}), FINI, FINI])
     client, file, historique, service = monter(tmp_path, [], pilote=pilote)
