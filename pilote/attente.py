@@ -73,24 +73,27 @@ def attendre_fin_reponse(
     intervalle: float = 0.5,
     horloge: Callable[[], float] = time.monotonic,
     dormir: Callable[[float], None] = time.sleep,
+    stabilite_apres_generation: float = 0.6,
 ) -> str:
-    """Renvoie le texte quand la génération est finie et que le texte n'a plus
-    bougé pendant `stabilite` secondes. Lève DelaiDepasse après `delai_max`."""
+    """Renvoie le texte quand la génération est finie et que le texte n'a plus bougé
+    pendant `stabilite` secondes — ou seulement `stabilite_apres_generation` si on a vu
+    Gemini générer puis s'arrêter : ce signal est sûr, inutile d'attendre 2 s à chaque
+    réponse. Lève DelaiDepasse après `delai_max`."""
     debut = horloge()
     dernier_texte = lire_texte()
     dernier_changement = debut
+    vu_generer = False
     while True:
         maintenant = horloge()
         if maintenant - debut > delai_max:
             raise DelaiDepasse(delai_max, dernier_texte.strip())
         texte = lire_texte()
+        en_cours = generation_en_cours()
+        vu_generer = vu_generer or en_cours
+        attente = stabilite_apres_generation if vu_generer else stabilite
         if texte != dernier_texte:
             dernier_texte = texte
             dernier_changement = maintenant
-        elif (
-            texte.strip()
-            and not generation_en_cours()
-            and maintenant - dernier_changement >= stabilite
-        ):
+        elif texte.strip() and not en_cours and maintenant - dernier_changement >= attente:
             return texte
         dormir(intervalle)

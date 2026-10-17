@@ -44,6 +44,12 @@ def reglages_a_faire(
     return changer_modele, changer_niveau
 
 
+def nouvelle_discussion_prete(url_actuelle: str, url_nouvelle: str, questions_affichees: int) -> bool:
+    """Vrai si la page est déjà une nouvelle discussion vide : inutile de la recharger
+    (une ou deux secondes de gagnées, surtout après la préparation au démarrage)."""
+    return url_actuelle.rstrip("/") == url_nouvelle.rstrip("/") and questions_affichees == 0
+
+
 class PiloteGemini:
     def __init__(
         self,
@@ -79,6 +85,15 @@ class PiloteGemini:
         except RepereIntrouvable as e:
             raise RepereIntrouvable(e.nom, self._capturer(page)) from e
 
+    def preparer(self) -> None:
+        """Ouvre Chrome et une nouvelle discussion Gemini, prête à recevoir un message
+        (appelé au démarrage d'Agent First : le premier message n'attend plus Chrome)."""
+        page = self._chrome.page()
+        if not nouvelle_discussion_prete(page.url, self._url_nouvelle, compter(page, "question")):
+            page.goto(self._url_nouvelle, wait_until="domcontentloaded")
+        self._verifier_acces(page)
+        attendre_repere(page, "champ_saisie", 30)
+
     def est_connecte(self) -> bool:
         return not self._demande_connexion(self._chrome.page())
 
@@ -94,7 +109,8 @@ class PiloteGemini:
     ) -> ResultatGemini:
         ouverte = False  # vrai si on vient d'ouvrir une conversation existante
         if adresse is None:
-            page.goto(self._url_nouvelle, wait_until="domcontentloaded")
+            if not nouvelle_discussion_prete(page.url, self._url_nouvelle, compter(page, "question")):
+                page.goto(self._url_nouvelle, wait_until="domcontentloaded")
         elif page.url != adresse:
             page.goto(adresse, wait_until="domcontentloaded")
             self._attendre_historique(page)

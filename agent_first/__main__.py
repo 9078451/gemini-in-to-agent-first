@@ -13,7 +13,7 @@ from agent_first.cowork_service import ServiceCowork
 from agent_first.diffuseur import Diffuseur
 from agent_first.dossier import choisir_dossier
 from agent_first.fenetre import ouvrir_quand_pret, repond
-from agent_first.file_attente import FileAttente
+from agent_first.file_attente import FileAttente, rechauffer
 from agent_first.historique import Historique
 from agent_first.openai_compat import adresse_reseau
 from agent_first.serveur import creer_app
@@ -50,6 +50,7 @@ def main() -> None:
 
     file = FileAttente(fabrique_pilote)
     file.demarrer()
+    rechauffer(file)  # Chrome et Gemini prêts avant le premier message
     historique = Historique(config.FICHIER_HISTORIQUE)
     par_defaut = Modes(
         [Option(n, d, n == config.MODELE_ACTIF_PAR_DEFAUT) for n, d in config.MODELES_PAR_DEFAUT],

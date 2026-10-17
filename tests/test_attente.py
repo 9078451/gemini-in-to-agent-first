@@ -135,3 +135,21 @@ def test_question_absente_mais_generation_en_cours_pas_d_abandon():
 
 def test_delai_sans_generation_ni_abandon_renvoie_faux():
     assert attendre_reponse(compteur(0), compteur(1), lambda: False, Horloge(), delai=30.0) is False
+
+
+def test_fin_rapide_quand_gemini_a_fini_d_ecrire():
+    # Avant : 2 s de texte immobile à chaque réponse, même quand Gemini avait déjà fini.
+    horloge = Horloge()
+    lire = lambda: "a" * min(int(horloge.t * 2) + 1, 7)  # grandit jusqu'à la fin de la génération (t = 3 s)
+    reponse = attendre_fin_reponse(
+        lire, lambda: horloge.t < 3.0, delai_max=180.0, stabilite=2.0,
+        intervalle=0.5, horloge=horloge, dormir=horloge.dormir,
+    )
+    assert reponse == "a" * 7 and horloge.t < 4.5
+
+
+def test_sans_signal_de_generation_la_stabilite_longue_reste():
+    horloge = Horloge()
+    attendre_fin_reponse(lambda: "abc", lambda: False, delai_max=180.0, stabilite=2.0,
+                         intervalle=0.5, horloge=horloge, dormir=horloge.dormir)
+    assert horloge.t >= 2.0

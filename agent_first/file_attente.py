@@ -17,6 +17,17 @@ journal = logging.getLogger(__name__)
 _FIN = object()
 
 
+def rechauffer(file: "FileAttente") -> Future:
+    """Prépare Chrome et Gemini en arrière-plan dès le démarrage : le premier message
+    n'attend plus l'ouverture de Chrome. Un échec (Google déconnecté…) est seulement noté :
+    il se reproduira, avec son message clair, au premier vrai message."""
+    futur = file.soumettre(lambda pilote: pilote.preparer())
+    futur.add_done_callback(
+        lambda f: f.exception() is not None and journal.warning("Gemini pas prêt au démarrage : %s", f.exception())
+    )
+    return futur
+
+
 class FileAttente:
     def __init__(self, fabrique_pilote: Callable[[], Pilote]) -> None:
         self._fabrique = fabrique_pilote

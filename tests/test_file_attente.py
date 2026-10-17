@@ -82,3 +82,37 @@ def test_occupee_tant_qu_une_demande_tourne_ou_attend(file):
     while file.occupee() and time.monotonic() < fin:
         time.sleep(0.01)
     assert not file.occupee()
+
+
+class PiloteAPreparer:
+    def __init__(self, erreur=None):
+        self.preparations = 0
+        self._erreur = erreur
+
+    def preparer(self):
+        self.preparations += 1
+        if self._erreur:
+            raise self._erreur
+
+
+def test_rechauffer_prepare_chrome_au_demarrage():
+    from agent_first.file_attente import rechauffer
+
+    pilote = PiloteAPreparer()
+    f = FileAttente(lambda: pilote)
+    f.demarrer()
+    rechauffer(f).result(timeout=5)
+    assert pilote.preparations == 1
+    f.arreter()
+
+
+def test_rechauffer_en_echec_n_empeche_rien():
+    from agent_first.file_attente import rechauffer
+
+    pilote = PiloteAPreparer(PasConnecteGoogle())
+    f = FileAttente(lambda: pilote)
+    f.demarrer()
+    with pytest.raises(PasConnecteGoogle):
+        rechauffer(f).result(timeout=5)
+    assert f.soumettre(lambda p: "ensuite").result(timeout=5) == "ensuite"
+    f.arreter()
