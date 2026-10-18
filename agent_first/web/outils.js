@@ -50,9 +50,10 @@ export function titreDepuis(texte) {
   return titre.length <= LONGUEUR_TITRE ? titre : `${titre.slice(0, LONGUEUR_TITRE - 1)}…`;
 }
 
-export function metaMessage(message) {
+// La ligne sous une réponse : l'assistant, le modèle, le niveau, la durée.
+export function metaMessage(message, libelle = "Gemini") {
   return [
-    "Gemini",
+    libelle,
     message.modele,
     message.niveau && `réflexion ${message.niveau}`,
     message.duree != null && formaterDuree(message.duree),
@@ -85,16 +86,46 @@ export function cheminCourt(chemin) {
   return chemin.replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/i, "~");
 }
 
-// Ce que Gemini sait créer en plus du texte (menu « Créer » de la zone de saisie).
+// Ce que les assistants savent créer en plus du texte (menu « Créer » de la zone de saisie).
 export const OUTILS = {
-  image: { nom: "Image", icone: "i-image", attente: "Gemini crée l'image…", saisie: "Décris l'image à créer…", type: "image", article: "d'image" },
-  video: { nom: "Vidéo", icone: "i-video", attente: "Gemini crée la vidéo… (souvent plusieurs minutes)", saisie: "Décris la vidéo à créer…", type: "video", article: "de vidéo" },
-  musique: { nom: "Musique", icone: "i-musique", attente: "Gemini compose la musique…", saisie: "Décris la musique à créer…", type: "audio", article: "de musique" },
+  image: { nom: "Image", icone: "i-image", attente: "crée l'image…", saisie: "Décris l'image à créer…", type: "image", article: "d'image" },
+  video: { nom: "Vidéo", icone: "i-video", attente: "crée la vidéo… (souvent plusieurs minutes)", saisie: "Décris la vidéo à créer…", type: "video", article: "de vidéo" },
+  musique: { nom: "Musique", icone: "i-musique", attente: "compose la musique…", saisie: "Décris la musique à créer…", type: "audio", article: "de musique" },
 };
 
-// Le texte d'attente pendant que Gemini travaille.
-export function texteAttente(outil) {
-  return OUTILS[outil]?.attente ?? "Gemini réfléchit…";
+// Le texte d'attente pendant que l'assistant travaille.
+export function texteAttente(outil, libelle = "Gemini") {
+  return `${libelle} ${OUTILS[outil]?.attente ?? "réfléchit…"}`;
+}
+
+// L'assistant qui a écrit une réponse (« chatgpt »…), noté dans ses détails ; Gemini sinon.
+export function fournisseurDuMessage(message) {
+  try {
+    return JSON.parse(message.details ?? "null")?.fournisseur ?? "gemini";
+  } catch {
+    return "gemini";
+  }
+}
+
+// Le nom affiché d'un assistant, d'après la liste de /api/fournisseurs.
+export function libelleDe(fournisseurs, nom) {
+  return fournisseurs.find((f) => f.nom === nom)?.libelle ?? (nom ? nom[0].toUpperCase() + nom.slice(1) : "Gemini");
+}
+
+// Une note de relais (« ChatGPT a pris le relais de Gemini »), lue dans ses détails.
+export function texteRelais(message) {
+  let note = {};
+  try {
+    note = JSON.parse(message.details ?? "null") ?? {};
+  } catch {
+    // détails illisibles : le texte du message suffit
+  }
+  return note.vers && note.de ? { texte: `${note.vers} a pris le relais de ${note.de}`, raison: note.raison ?? "" } : { texte: message.texte, raison: "" };
+}
+
+// L'assistant de la conversation sait-il créer cet outil ? (null : une réponse écrite, toujours.)
+export function outilPossible(fournisseur, outil) {
+  return !outil || Boolean(fournisseur?.outils?.includes(outil));
 }
 
 // L'outil d'un message de l'utilisateur (gardé dans ses détails), ou null.
@@ -107,11 +138,11 @@ export function outilDuMessage(message) {
 }
 
 // Un avertissement quand le média demandé n'est pas arrivé, ou null.
-export function avertissementMedia(outil, medias = [], perdus = 0) {
+export function avertissementMedia(outil, medias = [], perdus = 0, libelle = "Gemini") {
   const recus = medias.filter((m) => m.type === OUTILS[outil]?.type).length;
-  if (perdus) return `Médias vus dans Gemini mais non récupérés : ${perdus} (détails dans journaux/agent_first.log).`;
+  if (perdus) return `Médias vus dans ${libelle} mais non récupérés : ${perdus} (détails dans journaux/agent_first.log).`;
   if (outil && !recus) {
-    return `Gemini n'a pas renvoyé ${OUTILS[outil].article} : il a pu refuser la demande, ou ce modèle ne sait pas en créer. Reformule, ou choisis un autre modèle.`;
+    return `${libelle} n'a pas renvoyé ${OUTILS[outil].article} : il a pu refuser la demande, ou ce modèle ne sait pas en créer. Reformule, ou choisis un autre modèle.`;
   }
   return null;
 }
@@ -147,7 +178,7 @@ export function trierPieces(dejaJointes, nouvelles) {
   return { acceptees, refus };
 }
 
-// Le message de Gemini a été arrêté par l'utilisateur.
+// La réponse a été arrêtée par l'utilisateur.
 export function estInterrompue(message) {
   try {
     return Boolean(JSON.parse(message.details ?? "null")?.interrompue);

@@ -1,4 +1,4 @@
-"""Cocher un outil de création de Gemini (images, vidéos, musique) avant d'envoyer.
+"""Cocher un outil de création du site (images, vidéos, musique) avant d'envoyer.
 
 Au mieux : si le menu « Outils » ou l'outil est introuvable (interface changée, outil
 absent du compte), la demande part quand même, rédigée pour que Gemini crée le média.
@@ -10,7 +10,7 @@ from playwright.sync_api import Error as ErreurPlaywright
 from playwright.sync_api import Locator, Page
 
 from pilote.reperes import premier_present
-from pilote.selecteurs import OPTIONS_OUTIL
+from pilote.sites import GEMINI, Site
 
 journal = logging.getLogger(__name__)
 
@@ -28,14 +28,14 @@ def option_pour(libelles: list[str], outil: str) -> int | None:
     return next((i for i, libelle in enumerate(libelles) if motif.search(" ".join(libelle.split()))), None)
 
 
-def choisir_outil(page: Page, outil: str) -> bool:
+def choisir_outil(page: Page, outil: str, site: Site = GEMINI) -> bool:
     """Coche l'outil dans le menu « Outils ». True s'il est coché."""
-    bouton = premier_present(page, "bouton_outils")
+    bouton = premier_present(page, "bouton_outils", site.reperes)
     if bouton is None or not bouton.first.is_visible():
         return False
     try:
         bouton.first.click(timeout=5000)
-        options = _options(page)
+        options = _options(page, site)
         if options is None:
             return False
         i = option_pour([options.nth(n).inner_text() for n in range(options.count())], outil)
@@ -49,12 +49,12 @@ def choisir_outil(page: Page, outil: str) -> bool:
         journal.warning("Outil « %s » non coché", outil, exc_info=True)
         return False
     finally:
-        _fermer_menu(page)
+        _fermer_menu(page, site)
 
 
-def _options(page: Page) -> Locator | None:
+def _options(page: Page, site: Site) -> Locator | None:
     for _ in range(10):  # le menu s'ouvre avec une petite animation
-        for selecteur in OPTIONS_OUTIL:
+        for selecteur in site.options_outil:
             options = page.locator(selecteur).filter(visible=True)
             if options.count() > 0:
                 return options
@@ -62,10 +62,10 @@ def _options(page: Page) -> Locator | None:
     return None
 
 
-def _fermer_menu(page: Page) -> None:
+def _fermer_menu(page: Page, site: Site) -> None:
     """Le menu se referme en général tout seul après le choix ; sinon Échap, sans vider la saisie."""
     try:
-        if any(page.locator(s).filter(visible=True).count() for s in OPTIONS_OUTIL):
+        if any(page.locator(s).filter(visible=True).count() for s in site.options_outil):
             page.keyboard.press("Escape")
     except ErreurPlaywright:
         pass

@@ -52,7 +52,8 @@ def agent(tmp_path):
         pilotes[role] = FauxPilote(role, libere if role == ONGLET_COWORK else None)
         return pilotes[role]
 
-    agent = assembler(fabrique, lambda: True, Historique(tmp_path / "historique.db"), tmp_path / "cle.txt")
+    agent = assembler(fabrique, lambda: True, Historique(tmp_path / "historique.db"), tmp_path / "cle.txt",
+                      fichier_reglages=tmp_path / "reglages.json")
     agent.pilotes, agent.libere, agent.dossier = pilotes, libere, tmp_path
     agent.client = TestClient(agent.app, base_url="http://127.0.0.1:8765")
     agent.client_api = TestClient(agent.api, headers={"Authorization": f"Bearer {agent.garde.cle}"})
@@ -98,7 +99,7 @@ def test_l_api_repond_pendant_une_tache_cowork(agent):
 
 def test_les_modeles_sont_lus_pendant_une_tache_cowork(agent):
     tache_cowork_en_cours(agent)
-    ids = [m["id"] for m in agent.client_api.get("/v1/models").json()["data"]]
+    ids = [m["id"] for m in agent.client_api.get("/v1/models").json()["data"] if m["owned_by"] in ("gemini", "agent-first")]
     assert ids == ["modèle lu par chat", "agent-first"]
     assert agent.client.get("/api/modeles").json()["modeles"][0]["nom"] == "modèle lu par chat"
 

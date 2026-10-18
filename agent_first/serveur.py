@@ -2,10 +2,8 @@
 import io
 import json
 import logging
-import queue
 import re
 import threading
-import time
 import zipfile
 from concurrent.futures import CancelledError
 from concurrent.futures import TimeoutError as DelaiFutur
@@ -26,15 +24,18 @@ from agent_first.cle_api import GardeCle
 from agent_first.cowork_service import TacheEnCours
 from agent_first.creation import requete_creation
 from agent_first.diffuseur import Diffuseur
+from agent_first.envoi import Repartiteur, Tentative, peut_basculer, transcription
 from agent_first.file_attente import FileAttente, attendre
+from agent_first.fournisseurs import Fournisseur
 from agent_first.historique import ConversationInconnue, Historique
 from agent_first.mediatheque import Mediatheque, mime_de
 from agent_first.nettoyage import nettoyer_html
-from agent_first.openai_compat import nettoyer_reponse
 from agent_first.pieces_jointes import MAX_PIECES, PieceIllisible, depuis_base64
+from agent_first.reglages_app import ReglagesApp
 from agent_first.reponses import garder_reponse
-from pilote.erreurs import ChoixBloque, ErreurPilote, ModeleIntrouvable, NiveauIntrouvable
+from pilote.erreurs import ChoixBloque, ErreurPilote, LimiteAtteinte, ModeleIntrouvable, NiveauIntrouvable
 from pilote.modeles import Modes, ResultatGemini
+from pilote.sites import GEMINI, SITES
 
 journal = logging.getLogger(__name__)
 
@@ -49,6 +50,17 @@ class NouvelleConversation(BaseModel):
     niveau: str | None = None
     mode: str = "chat"
     dossier: str | None = None
+    fournisseur: str = "gemini"  # « gemini », « chatgpt », « claude »…
+
+
+class ChangementFournisseur(BaseModel):
+    fournisseur: str
+    modele: str | None = None
+
+
+class NouveauxReglages(BaseModel):
+    redondance: bool | None = None
+    ordre: list[str] | None = None
 
 
 class PieceJointe(BaseModel):
@@ -63,6 +75,7 @@ class NouveauMessage(BaseModel):
     niveau: str | None = None
     outil: Outil | None = None  # créer une image, une vidéo, de la musique
     pieces: list[PieceJointe] = Field(default_factory=list, max_length=MAX_PIECES)  # fichiers joints
+    redondance: bool | None = None  # None : le réglage de l'app
 
     @field_validator("texte")
     @classmethod
@@ -128,19 +141,28 @@ def creer_app(
     mediatheque: Mediatheque | None = None,
     delais_media: dict[str, float] | None = None,
     attente_file: float = 110.0,
+    repartiteur: Repartiteur | None = None,
+    reglages: ReglagesApp | None = None,
 ) -> FastAPI:
-    """`file_chat` : la file de l'onglet du Chat (messages du Chat, état de Google, modèles) ;
+    """`file_chat` : la file de l'onglet du Chat de Gemini (messages, état de Google, modèles) ;
     les tâches Cowork passent par celle du service `cowork`. `delais_media` : limite de la
-    réponse de Gemini par outil de création ; `attente_file` s'y ajoute (attente de son tour)."""
+    réponse par outil de création ; `attente_file` s'y ajoute (attente de son tour).
+    `repartiteur` : les assistants (Gemini, ChatGPT…) et la redondance ; par défaut, Gemini seul."""
     app = FastAPI(title="Agent First")
     delais_media = delais_media or {}
-    google_connu: list[bool | None] = [None]  # dernier état lu du compte Google
-    en_vol: dict[str, tuple] = {}  # conversation → (futur, arrêt) du message du Chat en cours
+    connus: dict[str, bool | None] = {}  # dernier état lu de la connexion à chaque site
+    en_vol: dict[str, Tentative] = {}  # conversation → envoi du Chat en cours (pour l'arrêter)
     verrou_vol = threading.Lock()
     if hotes_autorises:
         # Une page web ne doit pas pouvoir joindre l'app par « reliure DNS » (et lire la clé de l'API).
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=hotes_autorises)
     modes = cache_modes or CacheModes(file_chat, chrome_lance, modes_par_defaut)
+    if repartiteur is None:
+        reglages = reglages or ReglagesApp(None, ["gemini"])
+        repartiteur = Repartiteur({"gemini": Fournisseur(GEMINI, file_chat, file_chat, modes)}, historique, reglages,
+                                  delai, delais_media, attente_file)
+    reglages = reglages or repartiteur._reglages
+    fournisseurs = repartiteur.fournisseurs
 
     @app.exception_handler(RequestValidationError)
     def demande_invalide(_requete, _exc):
@@ -149,20 +171,41 @@ def creer_app(
     @app.get("/api/etat")
     def etat():
         lance = chrome_lance()
-        if not lance:
-            google_connu[0] = None
-        elif not file_chat.occupee():
-            # Onglet du Chat occupé (une vidéo peut prendre des minutes) : le dernier état lu sert,
-            # sans mettre une vérification en file derrière la demande en cours.
-            try:
-                google_connu[0] = attendre(file_chat.soumettre(lambda pilote: pilote.est_connecte()), 5)
-            except Exception:
-                google_connu[0] = None  # injoignable : inconnu
-        return {"agent_first": True, "chrome": lance, "google": google_connu[0] if lance else None}
+        for nom, f in fournisseurs.items():
+            if not lance:
+                connus[nom] = None
+            elif f.file_chat.pilote_pret() or nom == "gemini":
+                if not f.file_chat.occupee():
+                    # Onglet occupé (une vidéo peut prendre des minutes) : le dernier état lu sert,
+                    # sans mettre une vérification en file derrière la demande en cours.
+                    try:
+                        connus[nom] = attendre(f.file_chat.soumettre(lambda pilote: pilote.est_connecte()), 5)
+                    except Exception:
+                        connus[nom] = None  # injoignable : inconnu
+            else:
+                connus[nom] = None  # fenêtre pas encore ouverte : inconnu, sans l'ouvrir
+        return {"agent_first": True, "chrome": lance, "google": connus.get("gemini") if lance else None,
+                "fournisseurs": {nom: connus.get(nom) for nom in fournisseurs}}
 
     @app.get("/api/modeles")
-    def modeles():
-        return asdict(modes.lire())
+    def modeles(fournisseur: str = "gemini"):
+        f = fournisseurs.get(fournisseur)
+        if f is None:
+            return erreur(404, f"Assistant inconnu : {fournisseur}.")
+        return asdict(f.modes.lire())
+
+    @app.get("/api/fournisseurs")
+    def lister_fournisseurs():
+        """Les assistants proposés, leurs modèles et ce qu'ils savent créer."""
+        return [f.decrire() for f in fournisseurs.values()]
+
+    @app.get("/api/reglages")
+    def lire_reglages():
+        return reglages.lire()
+
+    @app.post("/api/reglages")
+    def ecrire_reglages(demande: NouveauxReglages):
+        return reglages.ecrire(demande.redondance, demande.ordre)
 
     @app.get("/api/conversations")
     def conversations(recherche: str = "", periode: Periode = "tout"):
@@ -170,10 +213,25 @@ def creer_app(
 
     @app.post("/api/conversations")
     def nouvelle_conversation(demande: NouvelleConversation | None = None):
-        reglages = demande or NouvelleConversation()
+        choix = demande or NouvelleConversation()
+        if choix.fournisseur not in fournisseurs:
+            return erreur(422, f"Assistant inconnu ou désactivé : {choix.fournisseur} (FOURNISSEURS dans config.py).")
         return asdict(
-            historique.creer(reglages.modele, reglages.niveau, reglages.mode, reglages.dossier)
+            historique.creer(choix.modele, choix.niveau, choix.mode, choix.dossier, fournisseur=choix.fournisseur)
         )
+
+    @app.post("/api/conversations/{identifiant}/fournisseur")
+    def changer_fournisseur(identifiant: str, demande: ChangementFournisseur):
+        """La conversation continue avec un autre assistant (il recevra la transcription)."""
+        if demande.fournisseur not in fournisseurs:
+            return erreur(422, f"Assistant inconnu ou désactivé : {demande.fournisseur}.")
+        try:
+            conversation = historique.conversation(identifiant)
+            if conversation.fournisseur != demande.fournisseur:
+                historique.basculer(identifiant, demande.fournisseur, demande.modele)
+            return asdict(historique.conversation(identifiant))
+        except ConversationInconnue:
+            return erreur(404, INCONNUE)
 
     @app.post("/api/cowork/{identifiant}/messages")
     def cowork_message(identifiant: str, demande: MessageCowork):
@@ -186,7 +244,8 @@ def creer_app(
         if cowork.en_cours(identifiant):
             return erreur(409, EN_COURS)
         try:  # le service enregistre le message s'il accepte la tâche
-            cowork.demarrer(identifiant, conv.dossier, conv.adresse, demande.texte, conv.modele, conv.niveau)
+            cowork.demarrer(identifiant, conv.dossier, conv.adresse, demande.texte, conv.modele, conv.niveau,
+                            fournisseur=conv.fournisseur)
         except TacheEnCours:
             return erreur(409, EN_COURS)
         return {"ok": True}
@@ -270,15 +329,21 @@ def creer_app(
 
     @app.post("/api/conversations/{identifiant}/messages")
     def envoyer(identifiant: str, demande: NouveauMessage, direct: bool = False):
-        """`direct` : la réponse arrive en NDJSON pendant que Gemini l'écrit (lignes « texte »,
-        puis « fin », « erreur » ou « arrete »)."""
+        """`direct` : la réponse arrive en NDJSON pendant que l'assistant l'écrit (lignes
+        « texte », « relais », puis « fin », « erreur » ou « arrete »)."""
         outil = demande.outil
         try:
             pieces = [depuis_base64(p.nom, p.mime, p.donnees) for p in demande.pieces]
         except PieceIllisible as e:
             return erreur(422, str(e))
         try:
-            adresse = historique.conversation(identifiant).adresse
+            conversation = historique.conversation(identifiant)
+            f = fournisseurs.get(conversation.fournisseur)
+            if f is None:
+                return erreur(409, f"« {conversation.fournisseur} » n'est plus proposé (FOURNISSEURS dans config.py).")
+            if outil and outil not in f.outils:
+                return erreur(422, f"{f.libelle} ne sait pas créer ça : choisis un modèle Gemini pour une vidéo ou de la musique.")
+            precedents = historique.messages(identifiant)
             joints = mediatheque.enregistrer(identifiant, pieces) if mediatheque is not None and pieces else []
             historique.ajouter_message(
                 identifiant, "toi", demande.texte, modele=demande.modele, niveau=demande.niveau,
@@ -286,89 +351,106 @@ def creer_app(
             )
         except ConversationInconnue:
             return erreur(404, INCONNUE)
-        texte, limite = demande.texte, delai
-        arret, ecrit = threading.Event(), queue.Queue()
-        options = {"arret": arret}
-        if outil:  # rédigée pour que Gemini crée le média ; plus de temps qu'une réponse écrite
-            texte = requete_creation(outil, demande.texte, suite=adresse is not None, joints=bool(pieces))
-            options |= {"outil": outil, "delai": delais_media.get(outil)}
-            limite = (delais_media[outil] + attente_file) if outil in delais_media else delai
-        if pieces:
-            options["pieces"] = tuple(pieces)
-        if direct:
-            options["au_fil"] = lambda brut: ecrit.put(nettoyer_reponse(brut))
+        limite = repartiteur.limite(outil)
+        deja_repondu = any(m.role == "gemini" for m in precedents)
+        redondance = reglages.lire()["redondance"] if demande.redondance is None else demande.redondance
 
-        def travail(pilote):
-            # Gardée dans la file, juste après la réponse : arrivée après le délai, elle est quand
-            # même dans l'historique quand on rouvre la conversation.
-            resultat = pilote.envoyer(adresse, texte, demande.modele, demande.niveau, **options)
-            return resultat, enregistrer_reponse(identifiant, resultat)
+        def autres(e: BaseException) -> dict:
+            """Sans la redondance, les assistants qu'on peut proposer à la place de celui qui a échoué."""
+            if redondance or not peut_basculer(e):
+                return {}
+            try:
+                actuel = historique.conversation(identifiant).fournisseur
+            except ConversationInconnue:
+                return {}
+            return {"autres": repartiteur.suivants(actuel, outil)}
 
-        futur = file_chat.soumettre(travail)
-        with verrou_vol:
-            en_vol[identifiant] = (futur, arret)
-        futur.add_done_callback(lambda _f: liberer(identifiant, futur))
+        def rediger(_fournisseur: str, adresse: str | None) -> str:
+            # Un assistant qui n'a pas vu la conversation (relais, changement de modèle) en reçoit la transcription.
+            base = transcription(precedents, demande.texte) if adresse is None and deja_repondu else demande.texte
+            if outil:  # rédigée pour que l'assistant crée le média
+                return requete_creation(outil, base, suite=adresse is not None, joints=bool(pieces))
+            return base
+
+        def suivre(tentative: Tentative) -> None:
+            with verrou_vol:
+                en_vol[identifiant] = tentative
+            tentative.futur.add_done_callback(lambda _f: liberer(identifiant, tentative))
+
+        deroulement = repartiteur.deroulement(
+            identifiant, rediger, demande.modele, demande.niveau, outil, tuple(pieces), demande.redondance,
+            apres=lambda resultat, nom: (resultat, enregistrer_reponse(identifiant, resultat, nom)),
+            direct=direct, suivre=suivre,
+        )
         if direct:
-            return StreamingResponse(en_direct(identifiant, futur, ecrit, limite), media_type="application/x-ndjson")
+            return StreamingResponse(en_direct(identifiant, deroulement, limite, autres), media_type="application/x-ndjson")
+        relais = []
         try:
-            resultat, message = attendre(futur, limite)
+            for ev in deroulement:
+                if ev["type"] == "relais":
+                    relais.append(noter_relais(identifiant, ev))
+                elif ev["type"] == "fin":
+                    resultat, message = ev["retour"]
+                    return {"message": message, "medias_perdus": resultat.medias_perdus,
+                            "fournisseur": ev["fournisseur"], "relais": relais}
         except CancelledError:
             return {"message": None, "arrete": True}
         except Exception as e:
-            return echec(identifiant, *raison_echec(e, limite))
-        return {"message": message, "medias_perdus": resultat.medias_perdus}
+            return echec(identifiant, *raison_echec(e, limite), **autres(e))
 
-    def en_direct(identifiant: str, futur, ecrit: queue.Queue, limite: float) -> Iterator[str]:
-        fin, dernier = time.monotonic() + limite, None
-        while True:
-            texte = None
-            while not ecrit.empty():
-                texte = ecrit.get_nowait()
-            if texte is not None and texte != dernier:
-                dernier = texte
-                yield ligne({"type": "texte", "texte": texte})
-            try:
-                resultat, message = futur.result(timeout=0.25)
-                break
-            except DelaiFutur:
-                if time.monotonic() < fin:
-                    continue
-                futur.cancel()
-                code, texte_erreur = raison_echec(DelaiFutur(), limite)
-            except CancelledError:
-                yield ligne({"type": "arrete"})
-                return
-            except Exception as e:
-                code, texte_erreur = raison_echec(e, limite)
+    def en_direct(identifiant: str, deroulement: Iterator[dict], limite: float,
+                  autres: Callable[[BaseException], dict]) -> Iterator[str]:
+        try:
+            for ev in deroulement:
+                if ev["type"] == "texte":
+                    yield ligne(ev)
+                elif ev["type"] == "relais":
+                    yield ligne(noter_relais(identifiant, ev))
+                elif ev["type"] == "fin":
+                    resultat, message = ev["retour"]
+                    yield ligne({"type": "fin", "message": message, "medias_perdus": resultat.medias_perdus,
+                                 "fournisseur": ev["fournisseur"]})
+        except CancelledError:
+            yield ligne({"type": "arrete"})
+        except Exception as e:
+            code, texte_erreur = raison_echec(e, limite)
             noter_erreur(identifiant, texte_erreur)
-            yield ligne({"type": "erreur", "code": code, "erreur": texte_erreur})
-            return
-        yield ligne({"type": "fin", "message": message, "medias_perdus": resultat.medias_perdus})
+            yield ligne({"type": "erreur", "code": code, "erreur": texte_erreur, **autres(e)})
 
-    def liberer(identifiant: str, futur) -> None:
+    def noter_relais(identifiant: str, ev: dict) -> dict:
+        """Gardé dans l'historique : en rouvrant la conversation, on voit qui a pris le relais."""
+        note = {"type": "relais", "de": ev["de"], "vers": ev["vers"], "fournisseur": ev["fournisseur"], "raison": ev["raison"]}
+        try:
+            historique.ajouter_message(identifiant, "relais", f"{ev['de']} → {ev['vers']}", details=json.dumps(note, ensure_ascii=False))
+        except ConversationInconnue:
+            pass
+        return note
+
+    def liberer(identifiant: str, tentative: Tentative) -> None:
         with verrou_vol:
-            if en_vol.get(identifiant, (None,))[0] is futur:
+            if en_vol.get(identifiant) is tentative:
                 del en_vol[identifiant]
 
     @app.post("/api/conversations/{identifiant}/arreter")
     def arreter_message(identifiant: str):
         """Arrête le message du Chat en cours : retiré de la file s'il attend son tour, sinon
-        Gemini est interrompu et ce qu'il avait écrit est gardé."""
+        l'assistant est interrompu et ce qu'il avait écrit est gardé."""
         with verrou_vol:
-            vol = en_vol.get(identifiant)
-        if vol is None:
+            tentative = en_vol.get(identifiant)
+        if tentative is None:
             return erreur(409, "Aucune réponse en cours dans cette conversation.")
-        futur, arret = vol
-        if not futur.cancel():
-            arret.set()
+        tentative.arreter()
         return {"ok": True}
 
     def raison_echec(e: BaseException, limite: float) -> tuple[int, str]:
         if isinstance(e, DelaiFutur):
-            return 504, f"Pas de réponse de Gemini après {limite:.0f} s."
+            return 504, f"Pas de réponse après {limite:.0f} s."
         if isinstance(e, (ModeleIntrouvable, NiveauIntrouvable, ChoixBloque)):
-            modes.oublier()  # la liste a changé : relue à la prochaine demande
+            for f in fournisseurs.values():
+                f.modes.oublier()  # la liste a changé : relue à la prochaine demande
             return 502, str(e)
+        if isinstance(e, LimiteAtteinte):
+            return 429, str(e)
         if isinstance(e, ErreurPilote):
             return 502, str(e)
         journal.error("Erreur inattendue pendant l'envoi", exc_info=e)
@@ -393,7 +475,11 @@ def creer_app(
             for m in messages:
                 if m.role == "cowork":
                     continue
-                qui = {"toi": "Toi", "gemini": f"Gemini{f' ({m.modele})' if m.modele else ''}", "erreur": "Erreur"}.get(m.role, m.role)
+                if m.role == "relais":
+                    lignes += [f"_Relais : {m.texte}_", ""]
+                    continue
+                assistant = libelle_de(m)
+                qui = {"toi": "Toi", "gemini": f"{assistant}{f' ({m.modele})' if m.modele else ''}", "erreur": "Erreur"}.get(m.role, m.role)
                 lignes += [f"### {qui} · {m.cree_le}", "", m.texte, ""]
                 for media in m.medias:
                     chemin = mediatheque.chemin(media["id"]) if mediatheque else None
@@ -413,9 +499,9 @@ def creer_app(
     def statistiques(periode: Periode = "7j"):
         return historique.statistiques(periode)
 
-    def enregistrer_reponse(identifiant: str, resultat: ResultatGemini) -> dict:
+    def enregistrer_reponse(identifiant: str, resultat: ResultatGemini, fournisseur: str = "gemini") -> dict:
         html = nettoyer_html(resultat.html) if resultat.html else None
-        message, _ = garder_reponse(historique, mediatheque, identifiant, resultat, html)
+        message, _ = garder_reponse(historique, mediatheque, identifiant, resultat, html, fournisseur)
         if message is None:  # conversation retirée pendant l'envoi : la réponse s'affiche quand même
             return {
                 "id": None, "conversation_id": identifiant, "role": "gemini", "texte": resultat.reponse,
@@ -424,9 +510,18 @@ def creer_app(
             }
         return asdict(message)
 
-    def echec(identifiant: str, code: int, message: str) -> JSONResponse:
+    def libelle_de(message) -> str:
+        """L'assistant qui a écrit une réponse (noté dans ses détails s'il n'est pas Gemini)."""
+        try:
+            nom = json.loads(message.details or "{}").get("fournisseur") or "gemini"
+        except ValueError:
+            nom = "gemini"
+        f = fournisseurs.get(nom)
+        return f.libelle if f else SITES[nom].libelle if nom in SITES else nom
+
+    def echec(identifiant: str, code: int, message: str, **extra) -> JSONResponse:
         noter_erreur(identifiant, message)
-        return erreur(code, message)
+        return JSONResponse(status_code=code, content={"erreur": message, **extra})
 
     def noter_erreur(identifiant: str, message: str) -> None:
         try:

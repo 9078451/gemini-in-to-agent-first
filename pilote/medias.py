@@ -14,7 +14,7 @@ from playwright.sync_api import Error as ErreurPlaywright
 from playwright.sync_api import Locator, Page
 
 from pilote.modeles import Media
-from pilote.selecteurs import CONTENEUR_REPONSE, HORS_MEDIAS, MEDIA_EN_COURS
+from pilote.sites import GEMINI, Site
 
 journal = logging.getLogger(__name__)
 
@@ -91,15 +91,15 @@ class MediaIllisible(Exception):
     pass
 
 
-def parametres() -> dict:
-    return {"conteneur": CONTENEUR_REPONSE, "hors": HORS_MEDIAS, "en_cours": MEDIA_EN_COURS,
+def parametres(site: Site = GEMINI) -> dict:
+    return {"conteneur": site.conteneur, "hors": site.hors_medias, "en_cours": site.media_en_cours,
             "taille_min": TAILLE_MIN_IMAGE, "max": MAX_MEDIAS, "marque": MARQUE}
 
 
-def etat_medias(reponse: Locator) -> tuple[int, bool]:
+def etat_medias(reponse: Locator, site: Site = GEMINI) -> tuple[int, bool]:
     """(nombre de médias, un média est-il encore en préparation) dans le bloc de la réponse."""
     try:
-        etat = reponse.evaluate(ETAT_MEDIAS, parametres())
+        etat = reponse.evaluate(ETAT_MEDIAS, parametres(site))
     except ErreurPlaywright:
         return 0, False  # la page se redessine : relu au tour suivant
     return int(etat["nombre"]), bool(etat["en_attente"])
@@ -175,10 +175,10 @@ def decoder_data_url(url: str) -> tuple[bytes, str]:
     return urllib.parse.unquote_to_bytes(contenu), mime
 
 
-def telecharger_medias(page: Page, reponse: Locator) -> tuple[list[Media], int]:
+def telecharger_medias(page: Page, reponse: Locator, site: Site = GEMINI) -> tuple[list[Media], int]:
     """Les médias de la réponse, et le nombre de ceux qui n'ont pas pu être téléchargés."""
     try:
-        trouves = reponse.evaluate(LISTER_MEDIAS, parametres())
+        trouves = reponse.evaluate(LISTER_MEDIAS, parametres(site))
     except ErreurPlaywright:
         journal.warning("Médias de la réponse illisibles", exc_info=True)
         return [], 0
@@ -223,7 +223,7 @@ def _telecharger(page: Page, trouve: dict) -> Media:
 def _par_requete(page: Page, url: str) -> tuple[bytes, str]:
     """Avec les cookies du Chrome dédié : les fichiers créés par Gemini sont liés au compte."""
     reponse = page.context.request.get(
-        url, headers={"Referer": "https://gemini.google.com/"}, timeout=DELAI_TELECHARGEMENT * 1000,
+        url, headers={"Referer": page.url}, timeout=DELAI_TELECHARGEMENT * 1000,
     )
     try:
         if not reponse.ok:

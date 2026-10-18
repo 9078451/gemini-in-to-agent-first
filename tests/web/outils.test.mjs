@@ -104,3 +104,24 @@ test("pièces jointes : limites et refus expliqués", async () => {
   assert.equal(estInterrompue({ details: '{"interrompue": true}' }), true);
   assert.equal(estInterrompue({ details: null }), false);
 });
+
+test("plusieurs assistants : nom, relais, outils possibles", async () => {
+  const { fournisseurDuMessage, libelleDe, metaMessage, outilPossible, texteAttente, texteRelais, avertissementMedia } = await import("../../agent_first/web/outils.js");
+  const fournisseurs = [{ nom: "gemini", libelle: "Gemini", outils: ["image", "video", "musique"] }, { nom: "chatgpt", libelle: "ChatGPT", outils: ["image"] }, { nom: "claude", libelle: "Claude", outils: [] }];
+  assert.equal(fournisseurDuMessage({ details: '{"fournisseur": "chatgpt"}' }), "chatgpt");
+  assert.equal(fournisseurDuMessage({ details: null }), "gemini");
+  assert.equal(fournisseurDuMessage({ details: "{cassé" }), "gemini");
+  assert.equal(libelleDe(fournisseurs, "chatgpt"), "ChatGPT");
+  assert.equal(libelleDe(fournisseurs, "grok"), "Grok"); // pas encore chargé : son nom, en majuscule
+  assert.equal(metaMessage({ modele: "Thinking", niveau: null, duree: 3 }, "ChatGPT"), "ChatGPT · Thinking · 3 s");
+  assert.equal(texteAttente(null, "Claude"), "Claude réfléchit…");
+  assert.equal(texteAttente("image", "ChatGPT"), "ChatGPT crée l'image…");
+  assert.match(avertissementMedia("image", [], 0, "ChatGPT"), /^ChatGPT n'a pas renvoyé d'image/);
+  assert.equal(outilPossible(fournisseurs[1], "image"), true);
+  assert.equal(outilPossible(fournisseurs[1], "video"), false);
+  assert.equal(outilPossible(fournisseurs[2], null), true);
+  assert.equal(outilPossible(undefined, "image"), false);
+  const relais = texteRelais({ texte: "Gemini → ChatGPT", details: JSON.stringify({ de: "Gemini", vers: "ChatGPT", raison: "limite" }) });
+  assert.deepEqual(relais, { texte: "ChatGPT a pris le relais de Gemini", raison: "limite" });
+  assert.deepEqual(texteRelais({ texte: "Gemini → ChatGPT", details: null }), { texte: "Gemini → ChatGPT", raison: "" });
+});

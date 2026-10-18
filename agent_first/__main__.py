@@ -13,6 +13,7 @@ from agent_first.historique import Historique
 from agent_first.openai_compat import adresse_reseau
 from pilote.chrome import ONGLET_COWORK, ChromeDedie, OngletGemini
 from pilote.gemini import PiloteGemini, ReglagesCompte
+from pilote.sites import SITES
 
 
 def main() -> None:
@@ -35,6 +36,12 @@ def main() -> None:
     reglages_compte = ReglagesCompte()  # les deux onglets partagent le compte Google
 
     def fabrique_pilote(role: str) -> PiloteGemini:
+        if role in SITES and role != "gemini":  # un autre assistant : son onglet, son profil
+            site = SITES[role]
+            return PiloteGemini(
+                OngletGemini(chrome, role, principal=True, prefixe=site.prefixe, url=site.url),
+                site.url, config.DELAI_REPONSE, config.STABILITE, config.DOSSIER_JOURNAUX, site=site,
+            )
         return PiloteGemini(
             OngletGemini(chrome, role, principal=role == ONGLET_COWORK),
             config.URL_GEMINI, config.DELAI_REPONSE, config.STABILITE, config.DOSSIER_JOURNAUX,

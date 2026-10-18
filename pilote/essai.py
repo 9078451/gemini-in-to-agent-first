@@ -6,6 +6,7 @@ Usage :
   python -m pilote.essai "Bonjour" --modele "3.1 Pro" --niveau Max. --html
   python -m pilote.essai "Un chat roux sur un toit" --outil image    médias dans journaux/essai-*
   python -m pilote.essai "Mets le ciel en violet" --outil image --joindre photo.jpg
+  python -m pilote.essai "Bonjour" --site chatgpt                      un autre site (claude, mistral…)
 Dans le texte, \\n devient un retour à la ligne.
 """
 import argparse
@@ -20,6 +21,7 @@ from pilote.erreurs import ErreurPilote
 from pilote.gemini import PiloteGemini
 from pilote.medias import extension
 from pilote.modeles import OUTILS, Media
+from pilote.sites import GEMINI, SITES
 
 
 def main() -> int:
@@ -34,7 +36,9 @@ def main() -> int:
     parser.add_argument("--outil", choices=OUTILS, help="coche l'outil de création de Gemini")
     parser.add_argument("--delai", type=float, help="limite de temps de la réponse, en secondes")
     parser.add_argument("--joindre", metavar="FICHIER", action="append", default=[], help="fichier joint (répétable)")
+    parser.add_argument("--site", choices=list(SITES), default="gemini", help="assistant à piloter")
     args = parser.parse_args()
+    site = SITES[args.site]
     pieces = []
     for chemin in map(Path, args.joindre):
         mime = mimetypes.guess_type(chemin.name)[0] or "application/octet-stream"
@@ -42,9 +46,13 @@ def main() -> int:
                             mime, chemin.read_bytes(), chemin.name))
 
     chrome = ChromeDedie(config.CHEMIN_CHROME, config.DOSSIER_PROFIL, config.PORT_CHROME, config.URL_GEMINI)
-    onglet = OngletGemini(chrome, ONGLET_COWORK, principal=True)
+    if site is GEMINI:
+        onglet = OngletGemini(chrome, ONGLET_COWORK, principal=True)
+    else:
+        onglet = OngletGemini(chrome, site.nom, principal=True, prefixe=site.prefixe, url=site.url)
     pilote = PiloteGemini(
-        onglet, config.URL_GEMINI, config.DELAI_REPONSE, config.STABILITE, config.DOSSIER_JOURNAUX
+        onglet, site.url if site is not GEMINI else config.URL_GEMINI, config.DELAI_REPONSE, config.STABILITE,
+        config.DOSSIER_JOURNAUX, site=site,
     )
     try:
         resultat = pilote.envoyer(

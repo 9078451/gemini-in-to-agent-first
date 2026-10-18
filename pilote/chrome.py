@@ -18,6 +18,7 @@ from pilote.erreurs import ChromeInjoignable
 
 ONGLET_COWORK = "cowork"
 ONGLET_CHAT = "chat"
+GEMINI = "https://gemini.google.com"
 # Chaque onglet piloté porte le nom de son rôle dans son sessionStorage (propre à l'onglet,
 # gardé quand il change de page) : Agent First le retrouve après un redémarrage.
 CLE_ONGLET = "agent-first-onglet"
@@ -77,11 +78,14 @@ class ChromeDedie:
         raise ChromeInjoignable()
 
 
-def choisir_onglet(onglets: list[tuple[str, str | None]], role: str, principal: bool) -> int | None:
+def choisir_onglet(
+    onglets: list[tuple[str, str | None]], role: str, principal: bool, prefixe: str = GEMINI,
+) -> int | None:
     """Parmi les onglets (adresse, marque), celui à piloter pour `role`, ou None pour en
     ouvrir un. L'onglet marqué pour ce rôle d'abord ; le principal prend sinon un onglet
-    Gemini non marqué (celui ouvert au lancement de Chrome). Jamais celui d'un autre rôle."""
-    gemini = [(i, marque) for i, (adresse, marque) in enumerate(onglets) if adresse.startswith("https://gemini.google.com")]
+    non marqué du site (`prefixe` : celui ouvert au lancement de Chrome pour Gemini). Jamais
+    celui d'un autre rôle."""
+    gemini = [(i, marque) for i, (adresse, marque) in enumerate(onglets) if adresse.startswith(prefixe)]
     for i, marque in gemini:
         if marque == role:
             return i
@@ -93,14 +97,19 @@ def choisir_onglet(onglets: list[tuple[str, str | None]], role: str, principal: 
 
 
 class OngletGemini:
-    """L'onglet Gemini d'un fil. `principal` : adopte l'onglet Gemini déjà ouvert ;
-    les autres ouvrent leur propre fenêtre (dans la même fenêtre, l'onglet de
-    derrière bute : menu des modèles fermé, texte figé, vu en essai réel)."""
+    """L'onglet d'un fil, sur Gemini ou un autre site (`prefixe`, ouvert sur `url`).
+    `principal` : adopte l'onglet du site déjà ouvert ; les autres ouvrent leur propre
+    fenêtre (dans la même fenêtre, l'onglet de derrière bute : menu des modèles fermé,
+    texte figé, vu en essai réel)."""
 
-    def __init__(self, chrome: ChromeDedie, role: str, principal: bool = False) -> None:
+    def __init__(
+        self, chrome: ChromeDedie, role: str, principal: bool = False, prefixe: str = GEMINI, url: str | None = None,
+    ) -> None:
         self._chrome = chrome
         self._role = role
         self._principal = principal
+        self._prefixe = prefixe
+        self._url = url
         self._playwright: Playwright | None = None
         self._navigateur: Browser | None = None
         self._page: Page | None = None
@@ -114,7 +123,8 @@ class OngletGemini:
         with self._chrome.verrou_onglets:
             contexte = navigateur.contexts[0]
             onglets = list(contexte.pages)
-            i = choisir_onglet([(o.url, _marque(o)) for o in onglets], self._role, self._principal)
+            i = choisir_onglet([(o.url, _marque(o, self._prefixe)) for o in onglets], self._role, self._principal,
+                               self._prefixe)
             page = onglets[i] if i is not None else self._ouvrir_fenetre(navigateur)
             page.evaluate(ECRIRE_MARQUE, [CLE_ONGLET, self._role])
         self._page = page
@@ -146,7 +156,7 @@ class OngletGemini:
         session = navigateur.new_browser_cdp_session()
         try:
             with contexte.expect_page() as nouvelle:
-                session.send("Target.createTarget", {"url": self._chrome.url_accueil, "newWindow": True})
+                session.send("Target.createTarget", {"url": self._url or self._chrome.url_accueil, "newWindow": True})
         finally:
             session.detach()
         page = nouvelle.value
@@ -154,9 +164,9 @@ class OngletGemini:
         return page
 
 
-def _marque(onglet: Page) -> str | None:
-    """Le rôle marqué dans cet onglet Gemini, ou None (non marqué, illisible, autre site)."""
-    if not onglet.url.startswith("https://gemini.google.com"):
+def _marque(onglet: Page, prefixe: str = GEMINI) -> str | None:
+    """Le rôle marqué dans cet onglet du site, ou None (non marqué, illisible, autre site)."""
+    if not onglet.url.startswith(prefixe):
         return None
     try:
         return onglet.evaluate(LIRE_MARQUE, CLE_ONGLET)

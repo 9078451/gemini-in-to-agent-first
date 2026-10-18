@@ -71,7 +71,7 @@
     <section class="vue" id="vue-accueil">
       <header class="accueil-entete">
         <h1>Tableau de bord</h1>
-        <p>Tes conversations avec Gemini, en Chat et en Cowork.</p>
+        <p>Tes conversations avec Gemini, ChatGPT, Claude…, en Chat et en Cowork.</p>
       </header>
       <div class="cartes" id="cartes"></div>
       <section class="panneau" id="panneau-medias" hidden>
@@ -164,9 +164,10 @@
         <h2>Paramètres</h2>
         <button class="icone" value="fermer" aria-label="Fermer"><svg><use href="#i-fermer"/></svg></button>
       </header>
-      <label>Modèle par défaut<select id="defaut-modele"></select></label>
+      <label>Assistant et modèle par défaut<select id="defaut-modele"></select></label>
       <label>Niveau de réflexion par défaut<select id="defaut-niveau"></select></label>
       <p class="note">S'appliquent aux nouvelles conversations. Gardés dans ce navigateur.</p>
+      <section class="assistants" id="assistants"></section>
       <div class="etats" id="etats"></div>
       <section class="api-reseau" id="api-reseau"></section>
     </form>

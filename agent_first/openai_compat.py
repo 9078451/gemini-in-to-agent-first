@@ -43,6 +43,26 @@ def texte_message(contenu) -> str:
     return "" if contenu is None else str(contenu)
 
 
+def resoudre_modele_site(demande: str, disponibles: list[str], ignores: tuple[str, ...] = ()) -> str | None:
+    """Le modèle de ChatGPT, Claude… qu'un client désigne à la façon de leur API
+    (« claude-opus-4-1 » → « Opus 4.1 », « gpt-5-thinking » → « Thinking ») : celui dont le
+    nom contient le plus de mots de la demande (les nombres départagent), s'il est seul en tête.
+    `ignores` : les mots qui ne désignent que l'assistant (« claude », « gpt »)."""
+    exacts = [nom for nom in disponibles if nom.strip().lower() == demande.strip().lower()]
+    if exacts:
+        return exacts[0]
+    mots = [m for m in re.split(r"[^a-z0-9.]+", demande.lower()) if m and m not in ignores]
+
+    def score(nom: str) -> int:
+        compact = re.sub(r"[^a-z0-9.]", "", nom.lower())
+        return sum((1 if m.replace(".", "").isdigit() else 10) for m in mots if m in compact)
+
+    scores = sorted(((score(nom), nom) for nom in disponibles), reverse=True)
+    if not scores or scores[0][0] < 10 or (len(scores) > 1 and scores[1][0] == scores[0][0]):
+        return None
+    return scores[0][1]
+
+
 def resoudre_modele(demande: str | None, disponibles: list[str]) -> str | None:
     """Le modèle de Gemini qu'un client désigne, souvent à sa façon (« gemini-3.1-pro »,
     « 3.1-pro-preview », « argon ») ; None = celui déjà choisi dans Gemini (« agent-first »,

@@ -19,6 +19,7 @@ def garder_reponse(
     conversation_id: str,
     resultat: ResultatGemini,
     html: str | None = None,
+    fournisseur: str | None = None,
 ) -> tuple[Message | None, list[dict]]:
     """Le message enregistré (None si la conversation a été retirée pendant l'envoi, ou si
     la réponse a été arrêtée avant que Gemini écrive quoi que ce soit) et la description
@@ -36,7 +37,7 @@ def garder_reponse(
         message = historique.ajouter_message(
             conversation_id, "gemini", nettoyer_reponse(resultat.reponse), html=html,
             modele=resultat.modele, niveau=resultat.niveau, duree=resultat.duree, medias=decrits,
-            details=json.dumps({"interrompue": True}) if resultat.interrompue else None,
+            details=_details(resultat, fournisseur),
         )
     except ConversationInconnue:
         journal.info("Conversation %s retirée pendant l'envoi : réponse non enregistrée", conversation_id)
@@ -44,3 +45,13 @@ def garder_reponse(
             mediatheque.supprimer(conversation_id)
         return None, decrits
     return message, decrits
+
+
+def _details(resultat: ResultatGemini, fournisseur: str | None) -> str | None:
+    """L'assistant qui a répondu (« chatgpt »…) et si la réponse a été arrêtée."""
+    details = {}
+    if fournisseur and fournisseur != "gemini":
+        details["fournisseur"] = fournisseur
+    if resultat.interrompue:
+        details["interrompue"] = True
+    return json.dumps(details) if details else None

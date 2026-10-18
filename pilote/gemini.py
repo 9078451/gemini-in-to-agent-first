@@ -1,4 +1,6 @@
-"""Taper un message dans Gemini, attendre la fin de la réponse et la lire."""
+"""Taper un message dans un assistant web (Gemini, ChatGPT, Claude…), attendre la fin de
+la réponse et la lire. Même déroulé pour tous ; le profil du site (`sites.Site`) donne ses
+adresses et ses repères."""
 import logging
 import threading
 import time
@@ -9,15 +11,16 @@ from typing import Callable
 from playwright.sync_api import Error as ErreurPlaywright
 from playwright.sync_api import Locator, Page
 
-from pilote import medias, modes, outils, pieces as pieces_jointes
+from pilote import medias, modes, modes_menu, outils, pieces as pieces_jointes
 from pilote.attente import Interrompue, attendre_envoi, attendre_fin_reponse, attendre_nouvelle_reponse
 from pilote.chrome import OngletGemini
 from pilote.erreurs import (
-    DelaiDepasse, ErreurPilote, PageInstable, PasConnecteGoogle, RepereIntrouvable, VerificationGoogle,
+    DelaiDepasse, ErreurPilote, LimiteAtteinte, LimiteGemini, PageInstable, PasConnecteGoogle, RepereIntrouvable,
+    VerificationGoogle,
 )
 from pilote.modeles import Media, Modes, ResultatGemini
 from pilote.reperes import attendre_repere, compter, premier_present
-from pilote.selecteurs import BLOC_CODE, CONTENU_REPONSE, DECOR_REPONSE, ENTETE_CODE
+from pilote.sites import GEMINI, Site
 
 journal = logging.getLogger(__name__)
 
@@ -28,16 +31,32 @@ DELAI_ENVOI = 60.0
 # demandé mais absent (une vidéo Veo arrive des minutes après « Je crée ta vidéo… »).
 PATIENCE_MEDIAS = {None: 8.0, "image": 60.0, "video": 420.0, "musique": 240.0}
 
+# Les blocs de texte de la réponse (les plus extérieurs), copiés ; dans chaque bloc de code,
+# seul le code reste (langue gardée à part) ; le décor (boutons, icônes) est retiré.
 EXTRAIRE_HTML = """(element, s) => {
-  const copie = (element.querySelector(s.contenu) || element).cloneNode(true);
-  copie.querySelectorAll(s.code).forEach(bloc => {
-    const entete = bloc.querySelector(s.entete);
-    const langue = entete ? entete.innerText.trim().split('\\n')[0].trim() : '';
-    const pre = bloc.querySelector('pre');
-    if (pre && langue) pre.setAttribute('data-langue', langue);
+  const blocs = [...element.querySelectorAll(s.contenu)];
+  const exterieurs = blocs.filter((b) => !blocs.some((a) => a !== b && a.contains(b)));
+  const copie = document.createElement('div');
+  for (const b of (exterieurs.length ? exterieurs : [element])) copie.append(b.cloneNode(true));
+  copie.querySelectorAll('pre').forEach((pre) => {
+    const bloc = s.code ? pre.closest(s.code) : null;
+    const entete = bloc && s.entete ? bloc.querySelector(s.entete) : null;
+    const code = pre.querySelector('code');
+    let langue = entete ? entete.innerText.trim().split('\\n')[0].trim() : '';
+    if (!langue && code) langue = (code.className.match(/language-([\\w+#.-]+)/) || [])[1] || '';
+    if (code && pre.firstElementChild !== code) pre.replaceChildren(code);
+    if (langue) pre.setAttribute('data-langue', langue);
   });
-  copie.querySelectorAll(s.decor).forEach(e => e.remove());
+  copie.querySelectorAll(s.decor).forEach((e) => e.remove());
   return copie.innerHTML;
+}"""
+
+# Le texte des blocs de la réponse, sans les lignes des boutons (« Copier le code »…).
+LIRE_TEXTE = """(element, s) => {
+  const blocs = [...element.querySelectorAll(s.contenu)];
+  const exterieurs = blocs.filter((b) => !blocs.some((a) => a !== b && a.contains(b)));
+  const texte = exterieurs.length ? exterieurs.map((b) => b.innerText).join('\\n\\n') : element.innerText;
+  return texte.split('\\n').filter((l) => !s.lignes.includes(l.trim())).join('\\n');
 }"""
 
 
@@ -93,6 +112,17 @@ class ReglagesCompte:
                 self._valeurs = (modele, niveau)
 
 
+def limite_dans(reponse: str, question: str, site: Site) -> str | None:
+    """La phrase de limite ou de saturation par laquelle le site a répondu, ou None. Seulement
+    une réponse courte qui en commence par là, et que la question ne citait pas (« que veut
+    dire “usage limit” ? » reçoit une vraie réponse)."""
+    texte = " ".join(reponse.split())
+    trouve = site.limite.search(texte[:300]) if texte and len(texte) < 500 else None
+    if trouve is None or trouve.group(0).lower() in question.lower():
+        return None
+    return texte[:200]
+
+
 class PiloteGemini:
     def __init__(
         self,
@@ -102,8 +132,11 @@ class PiloteGemini:
         stabilite: float,
         dossier_captures: Path,
         reglages: ReglagesCompte | None = None,
+        site: Site = GEMINI,
     ) -> None:
         self._onglet = onglet
+        self._site = site
+        self._r = site.reperes
         self._url_nouvelle = url_nouvelle
         self._delai_reponse = delai_reponse
         self._stabilite = stabilite
@@ -156,24 +189,27 @@ class PiloteGemini:
                 self._connus = False
                 if self._message_parti or essai == 2:
                     raise PageInstable(str(e).splitlines()[0]) from e
-                journal.warning("Page Gemini instable avant l'envoi, nouvel essai : %s", e)
+                journal.warning("Page %s instable avant l'envoi, nouvel essai : %s", self._site.libelle, e)
         raise AssertionError("inatteignable")
 
     def preparer(self) -> None:
-        """Ouvre Chrome et une nouvelle discussion Gemini, prête à recevoir un message
+        """Ouvre Chrome et une nouvelle discussion, prête à recevoir un message
         (appelé au démarrage d'Agent First : le premier message n'attend plus Chrome)."""
         page = self._page()
-        if not nouvelle_discussion_prete(page.url, self._url_nouvelle, compter(page, "question")):
+        if not nouvelle_discussion_prete(page.url, self._url_nouvelle, compter(page, "question", self._r)):
             self._discussion_neuve(page)
         self._verifier_acces(page)
-        attendre_repere(page, "champ_saisie", 30)
+        attendre_repere(page, "champ_saisie", 30, self._r)
 
     def est_connecte(self) -> bool:
         return not self._demande_connexion(self._page())
 
     def lister_modes(self) -> Modes:
         page = self._page()
-        attendre_repere(page, "bouton_mode", 15)
+        if self._site.modes == "gemini":
+            attendre_repere(page, "bouton_mode", 15, self._r)
+        else:
+            attendre_repere(page, "champ_saisie", 15, self._r)  # page prête ; un site sans sélecteur rend Modes([], [])
         return self._lire_reglages(page)
 
     def _envoyer(
@@ -184,7 +220,7 @@ class PiloteGemini:
         doit_arreter = arret.is_set if arret is not None else (lambda: False)
         recharger = self._outil_coche
         if adresse is None:
-            if recharger or not nouvelle_discussion_prete(page.url, self._url_nouvelle, compter(page, "question")):
+            if recharger or not nouvelle_discussion_prete(page.url, self._url_nouvelle, compter(page, "question", self._r)):
                 self._discussion_neuve(page)
         elif recharger or page.url != adresse:
             page.goto(adresse, wait_until="domcontentloaded")
@@ -193,7 +229,7 @@ class PiloteGemini:
         self._outil_coche = False  # rechargée : plus d'outil coché (gardé si le rechargement a échoué)
 
         try:
-            champ = attendre_repere(page, "champ_saisie", 15)
+            champ = attendre_repere(page, "champ_saisie", 15, self._r)
         except RepereIntrouvable:
             self._verifier_acces(page)
             raise
@@ -201,13 +237,13 @@ class PiloteGemini:
         self._ajuster(page, modele, niveau)
         if outil is not None:
             self._outil_coche = True
-            if not outils.choisir_outil(page, outil):
-                journal.info("Outil « %s » introuvable dans Gemini : la demande part sans lui", outil)
+            if not outils.choisir_outil(page, outil, self._site):
+                journal.info("Outil « %s » introuvable dans %s : la demande part sans lui", outil, self._site.libelle)
 
-        nb_avant = compter(page, "reponse")
-        questions_avant = compter(page, "question")
+        nb_avant = compter(page, "reponse", self._r)
+        questions_avant = compter(page, "question", self._r)
         if pieces:  # avant le texte : vider la saisie retire une image que l'éditeur aurait collée dans le texte
-            pieces_jointes.joindre(page, list(pieces))
+            pieces_jointes.joindre(page, list(pieces), self._site)
         champ.first.click()
         page.keyboard.press("Control+A")
         page.keyboard.press("Delete")
@@ -219,18 +255,20 @@ class PiloteGemini:
             page.keyboard.press("Control+A")
             page.keyboard.press("Delete")
             return ResultatGemini(reponse="", adresse=page.url, modele=self._modele, niveau=self._niveau, interrompue=True)
-        attendre_repere(page, "bouton_envoyer", 5).first.click()
+        self._cliquer_envoyer(page, champ, bool(pieces))
         self._message_parti = True
         try:
             attendre_envoi(
-                lambda: compter(page, "question"), questions_avant, DELAI_ENVOI, lambda: self._bandeau_limite(page)
+                lambda: compter(page, "question", self._r), questions_avant, DELAI_ENVOI, lambda: self._bandeau_limite(page)
             )
-        except ErreurPilote:
+        except ErreurPilote as e:
             # Vider le champ : sinon Gemini peut envoyer ce message plus tard, tout seul,
             # alors qu'Agent First a déjà abandonné.
             champ.first.click()
             page.keyboard.press("Control+A")
             page.keyboard.press("Delete")
+            if isinstance(e, LimiteGemini) and self._site is not GEMINI:
+                raise LimiteAtteinte(self._site.libelle, e.detail) from e
             raise
 
         # Un seul délai pour tout le message : Gemini peut réfléchir longtemps
@@ -241,11 +279,11 @@ class PiloteGemini:
         try:
             nouvelle = self._attendre_nouvelle_reponse(page, nb_avant, questions_avant + 1, delai, doit_arreter)
             reponse = attendre_fin_reponse(
-                lire_texte=nouvelle.inner_text,
+                lire_texte=lambda: self._texte(nouvelle),
                 generation_en_cours=lambda: self._generation_en_cours(page),
                 delai_max=max(0.0, fin - time.monotonic()),
                 stabilite=self._stabilite,
-                lire_medias=lambda: medias.etat_medias(nouvelle),
+                lire_medias=lambda: medias.etat_medias(nouvelle, self._site),
                 media_attendu=outil is not None,
                 patience_medias=PATIENCE_MEDIAS.get(outil, PATIENCE_MEDIAS[None]),
                 au_fil=au_fil,
@@ -256,7 +294,10 @@ class PiloteGemini:
         except Interrompue as e:
             return self._interrompre(page, nouvelle, e.partiel, round(time.monotonic() - debut, 1))
         duree = round(time.monotonic() - debut, 1)
-        trouves, perdus = medias.telecharger_medias(page, nouvelle)
+        limite = limite_dans(reponse.replace("Gemini a dit", "", 1), texte, self._site)
+        if limite:  # « Vous avez atteint votre limite… » à la place d'une réponse
+            raise LimiteAtteinte(self._site.libelle, limite)
+        trouves, perdus = medias.telecharger_medias(page, nouvelle, self._site)
         return ResultatGemini(
             reponse=reponse.strip(),
             adresse=page.url,
@@ -269,14 +310,14 @@ class PiloteGemini:
         )
 
     def _interrompre(self, page: Page, nouvelle: Locator | None, partiel: str, duree: float) -> ResultatGemini:
-        """Clique « Interrompre la réponse » dans Gemini et rend ce qu'il avait déjà écrit."""
-        bouton = premier_present(page, "bouton_arreter")
+        """Clique « Interrompre la réponse » sur le site et rend ce qu'il avait déjà écrit."""
+        bouton = premier_present(page, "bouton_arreter", self._r)
         if bouton is not None and bouton.first.is_visible():
             bouton.first.click(timeout=5000)
             time.sleep(0.5)  # le texte se fige
         if nouvelle is not None:
             try:
-                partiel = nouvelle.inner_text()
+                partiel = self._texte(nouvelle)
             except ErreurPlaywright:
                 pass
         return ResultatGemini(
@@ -313,7 +354,7 @@ class PiloteGemini:
         self._regler(page, modele, niveau)
 
     def _lire_reglages(self, page: Page) -> Modes:
-        lus = modes.lire_modes(page)
+        lus = modes.lire_modes(page) if self._site.modes == "gemini" else modes_menu.lire_modes(page, self._site)
         self._modele, self._niveau, self._connus = lus.modele_actif, lus.niveau_actif, True
         if self._chargee_a is not None:
             self._reglages.constater(self._chargee_a, self._modele, self._niveau)
@@ -326,20 +367,41 @@ class PiloteGemini:
         self._reglages.choix_en_cours()
         try:
             if changer_modele:
-                modes.choisir_modele(page, modele)
+                if self._site.modes == "gemini":
+                    modes.choisir_modele(page, modele)
+                else:
+                    modes_menu.choisir_modele(page, modele, self._site)
                 self._modele = modele
             if changer_niveau:
-                self._niveau = niveau if modes.choisir_niveau(page, niveau) else None
+                choisi = modes.choisir_niveau(page, niveau) if self._site.modes == "gemini" else False
+                self._niveau = niveau if choisi else None
         except Exception:
             self._connus = False  # le clic a pu porter : relus au prochain message
             raise
         self._reglages.choisir(self._modele, self._niveau)  # la prochaine discussion neuve les reprend
 
+    def _texte(self, reponse: Locator) -> str:
+        if not self._site.texte_par_contenu:
+            return reponse.inner_text()
+        return reponse.evaluate(LIRE_TEXTE, {"contenu": self._site.contenu, "lignes": list(self._site.lignes_decor)})
+
+    def _cliquer_envoyer(self, page: Page, champ: Locator, avec_pieces: bool) -> None:
+        """Le bouton Envoyer (il attend la fin de l'envoi des fichiers joints) ; sans bouton
+        reconnu, la touche Entrée, qui envoie sur tous ces sites."""
+        try:
+            bouton = attendre_repere(page, "bouton_envoyer", 5, self._r)
+        except RepereIntrouvable:
+            champ.first.click()
+            page.keyboard.press("End")
+            page.keyboard.press("Enter")
+            return
+        bouton.first.click(timeout=120_000 if avec_pieces else 30_000)
+
     def _html(self, reponse: Locator) -> str:
+        s = self._site
         try:
             return reponse.evaluate(
-                EXTRAIRE_HTML,
-                {"contenu": CONTENU_REPONSE, "code": BLOC_CODE, "entete": ENTETE_CODE, "decor": DECOR_REPONSE},
+                EXTRAIRE_HTML, {"contenu": s.contenu, "code": s.code, "entete": s.entete_code, "decor": s.decor},
             )
         except ErreurPlaywright:
             journal.warning("HTML de la réponse illisible : seul le texte est gardé", exc_info=True)
@@ -349,11 +411,11 @@ class PiloteGemini:
         """Après ouverture d'une conversation existante, attendre que ses
         anciennes réponses soient affichées (sinon l'une d'elles serait prise
         pour la nouvelle)."""
-        attendre_repere(page, "reponse", 15)
+        attendre_repere(page, "reponse", 15, self._r)
         precedent, stable_depuis = -1, time.monotonic()
         fin = time.monotonic() + 10
         while time.monotonic() < fin:
-            nombre = compter(page, "reponse")
+            nombre = compter(page, "reponse", self._r)
             if nombre != precedent:
                 precedent, stable_depuis = nombre, time.monotonic()
             elif time.monotonic() - stable_depuis >= 1.0:
@@ -364,8 +426,8 @@ class PiloteGemini:
         self, page: Page, nb_avant: int, nb_questions: int, delai: float, doit_arreter: Callable[[], bool],
     ) -> Locator:
         trouvee = attendre_nouvelle_reponse(
-            compter_reponses=lambda: compter(page, "reponse"),
-            compter_questions=lambda: compter(page, "question"),
+            compter_reponses=lambda: compter(page, "reponse", self._r),
+            compter_questions=lambda: compter(page, "question", self._r),
             generation_en_cours=lambda: self._generation_en_cours(page),
             nb_reponses_avant=nb_avant,
             nb_questions_attendu=nb_questions,
@@ -374,27 +436,27 @@ class PiloteGemini:
         )
         if not trouvee:
             raise RepereIntrouvable("reponse")
-        return premier_present(page, "reponse").nth(nb_avant)
+        return premier_present(page, "reponse", self._r).nth(nb_avant)
 
     def _bandeau_limite(self, page: Page) -> str | None:
         """Texte du bandeau « Votre limite sera réinitialisée à … », s'il est affiché."""
-        bandeau = premier_present(page, "bandeau_limite")
+        bandeau = premier_present(page, "bandeau_limite", self._r)
         if bandeau is None or not bandeau.first.is_visible():
             return None
         return " ".join(bandeau.first.inner_text().split()) or None
 
     def _generation_en_cours(self, page: Page) -> bool:
-        bouton = premier_present(page, "bouton_arreter")
+        bouton = premier_present(page, "bouton_arreter", self._r)
         return bouton is not None and bouton.first.is_visible()
 
     def _verifier_acces(self, page: Page) -> None:
-        if "/sorry/" in page.url or "challenge" in page.url:
-            raise VerificationGoogle()
+        if any(m in page.url for m in self._site.verification_url) or premier_present(page, "verification", self._r):
+            raise VerificationGoogle(self._site.compte)
         if self._demande_connexion(page):
-            raise PasConnecteGoogle()
+            raise PasConnecteGoogle(self._site.compte)
 
     def _demande_connexion(self, page: Page) -> bool:
-        return "accounts.google.com" in page.url or premier_present(page, "lien_connexion") is not None
+        return any(m in page.url for m in self._site.connexion_url) or premier_present(page, "lien_connexion", self._r) is not None
 
     def _capturer(self, page: Page) -> str | None:
         try:
@@ -405,3 +467,6 @@ class PiloteGemini:
         except ErreurPlaywright:
             journal.exception("Capture d'écran impossible")
             return None
+
+
+PiloteWeb = PiloteGemini  # le même pilote, quel que soit le site

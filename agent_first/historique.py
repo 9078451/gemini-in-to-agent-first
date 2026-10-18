@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     dossier TEXT,
     source TEXT NOT NULL DEFAULT 'app',
     tours_gemini INTEGER NOT NULL DEFAULT 0,
+    fournisseur TEXT NOT NULL DEFAULT 'gemini',
     cree_le TEXT NOT NULL,
     modifie_le TEXT NOT NULL
 );
@@ -48,11 +49,11 @@ CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id);
 # Colonnes ajoutées après la v2 : migrées à l'ouverture des bases existantes.
 COLONNES_AJOUTEES = {
     "conversations": [("mode", "TEXT NOT NULL DEFAULT 'chat'"), ("dossier", "TEXT"), ("source", "TEXT NOT NULL DEFAULT 'app'"),
-                      ("tours_gemini", "INTEGER NOT NULL DEFAULT 0")],
+                      ("tours_gemini", "INTEGER NOT NULL DEFAULT 0"), ("fournisseur", "TEXT NOT NULL DEFAULT 'gemini'")],
     "messages": [("details", "TEXT"), ("medias", "TEXT")],
 }
 COLONNES_CONVERSATION = """c.id, c.titre, c.adresse, c.modele, c.niveau, c.mode, c.dossier, c.source, c.tours_gemini,
-    c.cree_le, c.modifie_le,
+    c.fournisseur, c.cree_le, c.modifie_le,
     (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id) AS nb_messages"""
 COLONNES_MESSAGE = "id, conversation_id, role, texte, html, modele, niveau, duree, details, cree_le, medias"
 NON_VIDE = "EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)"
@@ -76,6 +77,7 @@ class Conversation:
     source: str = "app"  # « app » ou « api » (créée par un autre programme via l'API réseau)
     tours_gemini: int = 0  # messages envoyés dans la conversation Gemini en cours (Cowork)
     nb_messages: int = 0
+    fournisseur: str = "gemini"  # l'assistant qui répond : « gemini », « chatgpt », « claude »…
 
 
 @dataclass(frozen=True)
@@ -121,13 +123,14 @@ class Historique:
         mode: str = "chat",
         dossier: str | None = None,
         source: str = "app",
+        fournisseur: str = "gemini",
     ) -> Conversation:
         with self._verrou:
             identifiant, date = uuid.uuid4().hex, self._date()
             self._base.execute(
-                """INSERT INTO conversations (id, modele, niveau, mode, dossier, source, cree_le, modifie_le)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (identifiant, modele, niveau, mode, dossier, source, date, date),
+                """INSERT INTO conversations (id, modele, niveau, mode, dossier, source, fournisseur, cree_le, modifie_le)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (identifiant, modele, niveau, mode, dossier, source, fournisseur, date, date),
             )
             self._base.commit()
             return self._conversation(identifiant)
@@ -162,6 +165,18 @@ class Historique:
         with self._verrou:
             self._conversation(identifiant)
             self._base.execute("UPDATE conversations SET adresse = NULL, tours_gemini = 0 WHERE id = ?", (identifiant,))
+            self._base.commit()
+
+    def basculer(self, identifiant: str, fournisseur: str, modele: str | None = None) -> None:
+        """La conversation continue avec un autre assistant : nouvelle conversation de son côté
+        (adresse oubliée), son modèle à lui."""
+        with self._verrou:
+            self._conversation(identifiant)
+            self._base.execute(
+                """UPDATE conversations SET fournisseur = ?, adresse = NULL, tours_gemini = 0, modele = ?, niveau = NULL
+                   WHERE id = ?""",
+                (fournisseur, modele, identifiant),
+            )
             self._base.commit()
 
     def enregistrer_adresse(self, identifiant: str, adresse: str) -> None:

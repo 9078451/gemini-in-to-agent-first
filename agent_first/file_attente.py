@@ -65,6 +65,10 @@ class FileAttente:
         self._taches.put((travail, futur))
         return futur
 
+    def pilote_pret(self) -> bool:
+        """Le pilote a été fabriqué (l'onglet du site a servi au moins une fois)."""
+        return self._pilote is not None
+
     def occupee(self) -> bool:
         """Une demande tourne ou attend son tour (une tâche Cowork peut durer des minutes)."""
         with self._verrou:
