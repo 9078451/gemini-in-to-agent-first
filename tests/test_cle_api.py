@@ -54,3 +54,13 @@ def test_regenerer(tmp_path):
     assert nouvelle != ancienne and fichier.read_text(encoding="utf-8").strip() == nouvelle
     assert garde.verifier("1.2.3.4", f"Bearer {ancienne}") == 401
     assert garde.verifier("1.2.3.4", f"Bearer {nouvelle}") is None
+
+
+def test_lien_signe_pour_un_seul_media_et_perime_avec_la_cle(tmp_path):
+    garde = GardeCle(tmp_path / "cle.txt")
+    signature = garde.signer("a/b.png")
+    assert garde.signature_valide("a/b.png", signature)
+    assert not garde.signature_valide("a/c.png", signature)
+    assert not garde.signature_valide("a/b.png", None) and not garde.signature_valide("a/b.png", "")
+    garde.regenerer()
+    assert not garde.signature_valide("a/b.png", signature)

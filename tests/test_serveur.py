@@ -20,7 +20,7 @@ class FauxPilote:
         self.duree = 0.0
         self.listes = 0
 
-    def envoyer(self, adresse, texte, modele=None, niveau=None):
+    def envoyer(self, adresse, texte, modele=None, niveau=None, **_options):
         self.recus.append((adresse, texte, modele, niveau))
         time.sleep(self.duree)
         if self.erreur:
@@ -167,7 +167,7 @@ def test_suppression_pendant_envoi(pilote, tmp_path):
 def test_statistiques(client):
     envoyer(client, nouvelle(client), "Bonjour", modele="3.1 Pro")
     assert client.get("/api/statistiques", params={"periode": "7j"}).json() == {
-        "conversations": 1, "messages": 1, "modele_favori": "3.1 Pro", "temps_moyen": 1.5,
+        "conversations": 1, "messages": 1, "modele_favori": "3.1 Pro", "temps_moyen": 1.5, "medias": 0,
     }
 
 
@@ -202,7 +202,9 @@ def test_delai_depasse(pilote, tmp_path):
 
 
 def test_etat(client):
-    assert client.get("/api/etat").json() == {"agent_first": True, "chrome": True, "google": True}
+    assert client.get("/api/etat").json() == {
+        "agent_first": True, "chrome": True, "google": True, "fournisseurs": {"gemini": True},
+    }
 
 
 def test_page_web_servie_sans_cache(pilote, tmp_path):

@@ -16,6 +16,10 @@ DELAI_REPONSE = 180.0  # secondes max pour qu'une réponse Gemini se termine
 DELAI_REPONSE_COWORK = 600.0  # s, par message en Cowork : 4 Argon peut réfléchir plusieurs minutes avant d'écrire
 STABILITE = 2.0  # secondes sans changement du texte = réponse finie
 DELAI_AGENT = 290.0  # attente max d'Agent First (file d'attente + Gemini)
+ATTENTE_FILE = DELAI_AGENT - DELAI_REPONSE  # part de DELAI_AGENT laissée à l'attente de son tour
+
+# Création d'images, de vidéos et de musique : plus long qu'une réponse écrite.
+DELAI_MEDIA = {"image": 240.0, "video": 900.0, "musique": 600.0}  # s, réponse de Gemini
 
 # Mode Cowork
 DELAI_COMMANDE = 120.0  # secondes max pour une commande PowerShell
@@ -42,6 +46,24 @@ DOSSIER_DONNEES = RACINE / "donnees"
 DOSSIER_JOURNAUX = RACINE / "journaux"
 FICHIER_HISTORIQUE = DOSSIER_DONNEES / "historique.db"
 FICHIER_CLE_API = DOSSIER_DONNEES / "cle_api.txt"
+DOSSIER_MEDIAS = DOSSIER_DONNEES / "medias"  # images, vidéos et sons créés par Gemini
+FICHIER_REGLAGES = DOSSIER_DONNEES / "reglages.json"  # redondance et ordre des assistants (Paramètres)
+
+# Assistants pilotés dans le Chrome dédié, même principe que Gemini (voir pilote/sites.py) :
+# connecte-toi une fois à chacun, dans sa fenêtre. Retire un nom pour ne plus le proposer.
+# Leur fenêtre ne s'ouvre qu'au premier message qui leur est destiné.
+FOURNISSEURS = ["gemini", "chatgpt", "claude", "mistral", "deepseek", "grok"]
+# Redondance : un assistant saturé, à court de crédits ou indisponible passe la main au
+# suivant (ordre réglable dans Paramètres). Désactivée : l'app propose les autres, tu choisis.
+REDONDANCE_PAR_DEFAUT = False
+# Modèles proposés tant que la liste n'a pas été lue sur le site (relevés à la main).
+MODELES_SITES = {
+    "chatgpt": [("Auto", "Choisit pour toi"), ("Instant", "Répond tout de suite"), ("Thinking", "Réfléchit plus longtemps")],
+    "claude": [("Sonnet", "Rapide et polyvalent"), ("Opus", "Le plus capable"), ("Haiku", "Le plus rapide")],
+    "mistral": [],
+    "deepseek": [],
+    "grok": [],
+}
 
 # Utilisés tant que la liste n'a pas pu être lue dans Gemini (relevés le 2026-10-15).
 MODELES_PAR_DEFAUT = [

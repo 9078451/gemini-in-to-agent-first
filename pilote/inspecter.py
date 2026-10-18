@@ -3,23 +3,33 @@
 Usage :
   python -m pilote.inspecter                   compte chaque candidat
   python -m pilote.inspecter --html "CSS"      affiche le HTML du 1er élément trouvé
+  python -m pilote.inspecter --medias          médias (images, vidéos, sons) de la dernière réponse
+  python -m pilote.inspecter --site chatgpt    un autre site (chatgpt, claude, mistral, deepseek, grok)
 """
 import argparse
 import sys
 
 import config
 from pilote.chrome import ONGLET_COWORK, ChromeDedie, OngletGemini
-from pilote.selecteurs import REPERES
+from pilote.medias import LISTER_MEDIAS, etat_medias, parametres
+from pilote.reperes import premier_present
+from pilote.sites import GEMINI, SITES
 
 
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Inspecte la page Gemini du Chrome dédié.")
     parser.add_argument("--html", metavar="CSS", help="affiche le HTML du premier élément trouvé")
+    parser.add_argument("--medias", action="store_true", help="médias de la dernière réponse")
+    parser.add_argument("--site", choices=list(SITES), default="gemini", help="site à inspecter")
     args = parser.parse_args()
+    site = SITES[args.site]
 
     chrome = ChromeDedie(config.CHEMIN_CHROME, config.DOSSIER_PROFIL, config.PORT_CHROME, config.URL_GEMINI)
-    onglet = OngletGemini(chrome, ONGLET_COWORK, principal=True)
+    if site is GEMINI:
+        onglet = OngletGemini(chrome, ONGLET_COWORK, principal=True)
+    else:
+        onglet = OngletGemini(chrome, site.nom, principal=True, prefixe=site.prefixe, url=site.url)
     try:
         page = onglet.page()
         print(f"Page : {page.url}\n")
@@ -30,7 +40,18 @@ def main() -> None:
             else:
                 print(elements.first.evaluate("e => e.outerHTML")[:4000])
             return
-        for nom, candidats in REPERES.items():
+        if args.medias:
+            reponses = premier_present(page, "reponse", site.reperes)
+            if reponses is None:
+                print("Aucune réponse dans la page.")
+                return
+            derniere = reponses.last
+            nombre, en_preparation = etat_medias(derniere, site)
+            print(f"{nombre} média(s){' — un média est encore en préparation' if en_preparation else ''}")
+            for m in derniere.evaluate(LISTER_MEDIAS, parametres(site)):
+                print(f"  {m['type']:6} {m['url'][:110]}  {m['description'][:40]}")
+            return
+        for nom, candidats in site.reperes.items():
             print(nom)
             for selecteur in candidats:
                 print(f"  {page.locator(selecteur).count():>3}  {selecteur}")

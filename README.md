@@ -1,9 +1,11 @@
 # gemini-in-to-agent-first
 
-**agent.first** : discuter avec Gemini (le site web, avec ton compte Google)
-depuis une app sur mesure. L'app envoie chaque message à **Agent First**, qui
-pilote un Chrome dédié sur gemini.google.com, choisit le modèle et le niveau
-de réflexion, lit la réponse et la garde dans l'historique.
+**agent.first** : discuter avec Gemini (le site web, avec ton compte Google) —
+et aussi ChatGPT, Claude, Le Chat (Mistral), DeepSeek et Grok — depuis une app
+sur mesure. L'app envoie chaque message à **Agent First**, qui pilote un Chrome
+dédié sur le site de l'assistant, choisit le modèle et le niveau de réflexion,
+lit la réponse et la garde dans l'historique. Avec la **redondance**, un
+assistant saturé ou à court de crédits passe la main au suivant.
 
 ## Installation (une fois)
 
@@ -30,13 +32,85 @@ dédié était déjà ouvert avant la mise à jour, ferme-le une fois : Agent Fi
 relance avec les bons réglages.
 
 - **Nouvelle conversation**, choix du **modèle** et du **niveau de réflexion**
-  en haut de la discussion ; Entrée envoie, Maj+Entrée va à la ligne.
+  sous la zone de saisie ; Entrée envoie, Maj+Entrée va à la ligne.
+- **Créer** (sous la zone de saisie) : Texte, **Image**, **Vidéo** ou **Musique**
+  (voir plus bas). Une erreur propose **Réessayer** ; chaque bloc de code a son
+  bouton Copier.
+- **Joindre des fichiers** (photos, PDF, sons, vidéos…, 10 au plus, 50 Mo chacun) :
+  trombone, Ctrl+V d'une capture d'écran, ou glisser-déposer sur la discussion.
+  Avec **Créer → Image**, une photo jointe est retouchée (« mets le ciel en
+  violet »).
+- La réponse **s'écrit en direct** ; **Arrêter** l'interrompt dans Gemini et garde
+  ce qu'il avait déjà écrit (marqué « arrêtée »).
+- **Exporter** (en-tête de la discussion) : un `.zip` avec la conversation en
+  Markdown et tous ses médias. Le **tableau de bord** montre les derniers médias
+  créés (filtres Images, Vidéos, Sons).
 - **Accueil / Historique** : statistiques, recherche, reprise ou retrait d'une
   conversation (elle reste dans Gemini).
-- **Paramètres** : modèle et niveau par défaut, état de Chrome et de Google,
-  adresse et clé de l'API réseau.
+- **Paramètres** : assistant, modèle et niveau par défaut, **redondance** et ordre
+  des assistants, état de Chrome et de chaque compte, adresse et clé de l'API réseau.
 
 L'historique est dans `donnees/historique.db` (sur ton PC, exclu de git).
+
+## Images, vidéos et musique
+
+Choisis **Créer → Image, Vidéo ou Musique**, puis décris ce que tu veux. Agent
+First coche l'outil de création de Gemini (menu « Outils » de la page, s'il le
+trouve), rédige la demande pour que Gemini crée vraiment le média (et ne se
+contente pas de le décrire), attend qu'il soit prêt, puis le télécharge avec ta
+session Google (en taille réelle pour une image, si possible).
+
+- Les médias s'affichent dans la discussion : une image s'agrandit d'un clic,
+  vidéos et sons ont leur lecteur, chacun a un bouton **Télécharger**.
+- Ils sont gardés dans `donnees/medias/<conversation>/` et reviennent quand tu
+  rouvres la conversation ; la retirer de l'historique retire ses médias.
+- Délais (`DELAI_MEDIA` dans `config.py`) : 4 min pour une image, 15 min pour une
+  vidéo, 10 min pour de la musique. Une vidéo Veo prend souvent plusieurs
+  minutes ; le Chat attend pendant ce temps (Cowork, lui, continue).
+- Si Gemini répond sans média (refus, outil indisponible avec ce modèle ou ce
+  compte), un avertissement le dit : reformule, ou change de modèle.
+- Dans une conversation qui a déjà un média, une nouvelle demande peut le
+  modifier (« même image, mais en hiver »).
+
+Si Google change sa page et qu'un média n'est plus repéré :
+`python -m pilote.inspecter --medias` montre ce qu'Agent First voit dans la
+dernière réponse ; les repères sont dans `pilote/selecteurs.py`.
+
+## Plusieurs assistants et redondance
+
+Le menu des modèles (sous la zone de saisie) range les modèles **par assistant** :
+Gemini, ChatGPT, Claude, Le Chat, DeepSeek, Grok. Une nouvelle conversation
+propose aussi l'assistant d'un clic. Chaque assistant est piloté comme Gemini,
+dans **sa propre fenêtre du Chrome dédié** : elle s'ouvre au premier message qui
+lui est destiné ; connecte-toi une fois à ton compte dedans (chatgpt.com,
+claude.ai…). Le point devant son nom dit s'il est connecté.
+
+- **Changer d'assistant en cours de conversation** : choisis un modèle d'un autre
+  assistant dans le menu. La suite part chez lui, avec l'historique de la
+  conversation (il ne l'a pas vue : Agent First la lui transmet).
+- **Créer** : Gemini crée images, vidéos et musique ; ChatGPT, Le Chat et Grok
+  des images ; Claude et DeepSeek seulement du texte (les options impossibles
+  sont grisées).
+- **Redondance désactivée** (par défaut) : si l'assistant est saturé (« forte
+  demande »), n'a plus de crédits ou de messages, n'est pas connecté ou ne répond
+  pas, l'erreur propose **Avec ChatGPT**, **Avec Claude**… : tu choisis.
+- **Redondance activée** (Paramètres, ou en bas du menu des modèles) : Agent First
+  passe tout seul au suivant de la liste (ordre réglable dans Paramètres) et la
+  conversation continue chez lui ; une note « ChatGPT a pris le relais de
+  Gemini » le signale, gardée dans l'historique. Une image ou une vidéo ne passe
+  qu'à un assistant qui sait la créer. Arrêter une réponse ne déclenche jamais
+  le relais.
+
+`FOURNISSEURS` dans `config.py` liste les assistants proposés (retire un nom pour
+le cacher) ; `REDONDANCE_PAR_DEFAUT` règle la redondance au premier lancement.
+Les réglages de l'app sont dans `donnees/reglages.json`.
+
+Les repères de ChatGPT, Claude, Le Chat, DeepSeek et Grok (zone de saisie, bouton
+Envoyer, réponse…) sont dans `pilote/sites.py`. Ces sites changent souvent : si
+l'un ne répond plus, `python -m pilote.inspecter --site chatgpt` montre ce qui est
+trouvé sur la page, et `python -m pilote.essai "Bonjour" --site chatgpt` essaie
+un envoi. Automatiser ces sites peut aller contre leurs conditions d'utilisation
+et leurs limites de compte : utilise-les avec ton propre compte, à ton rythme.
 
 ## Mode Cowork
 
@@ -98,8 +172,73 @@ print(reponse.choices[0].message.content)
 ```
 
 Renvoyer l'historique complet (comme le fait un client OpenAI) continue la même
-conversation Gemini. Ces appels passent par la fenêtre du Chat : ils répondent
+conversation, chez le même assistant. Ces appels passent par la fenêtre du Chat : ils répondent
 pendant une tâche Cowork, mais un à la fois (les suivants attendent leur tour).
+
+- `model` : un nom de `/v1/models`, ou à la façon des clients (« gemini-3.1-pro »,
+  « 3.1-pro-preview », « argon ») ; « agent-first » garde le modèle déjà choisi
+  dans Gemini. **Le nom choisit l'assistant** : `gpt-…`, `o3…`, `chatgpt/Thinking`
+  → ChatGPT ; `claude-…`, `claude/Opus` → Claude ; `mistral-…` → Le Chat ;
+  `deepseek-…` → DeepSeek ; `grok-…` → Grok (« claude-opus-4-1 » devient « Opus »
+  s'il est proposé, sinon le modèle déjà choisi sur le site). Un assistant
+  désactivé dans `FOURNISSEURS` laisse la main à Gemini.
+- `provider` (extension) : `"gemini"`, `"chatgpt"`, `"claude"`… force l'assistant ;
+  `redundancy` (extension) : `true`/`false` active ou non le relais pour cet appel
+  (sinon le réglage de l'app). La réponse dit qui a répondu dans `provider` (comme
+  OpenRouter) ; un assistant saturé sans redondance donne une erreur **429**
+  (`rate_limit_error`). En flux, un relais s'annonce dans le texte
+  (« — ChatGPT prend le relais — »).
+- `reasoning_effort` : `none`/`minimal`/`low` → Min., `medium` → Moyen,
+  `high`/`xhigh` → Max.
+- `stream: true` : un commentaire `: ping` part toutes les 10 s de silence (les
+  clients n'abandonnent plus pendant que Gemini réfléchit) ; une erreur arrive
+  au format OpenAI (`data: {"error": …}`).
+- Une demande qui n'a pas pu commencer à temps est retirée de la file : elle ne
+  part pas vers Gemini plus tard. Une réponse arrivée après le délai est quand
+  même gardée dans l'historique.
+- **Fichiers joints** : les morceaux `image_url` (adresse `data:` ou `http(s)`),
+  `input_image`, `file` / `input_file` (`file_data`, `file_url`) et `input_audio`
+  sont envoyés à Gemini avec le message (10 au plus, 50 Mo chacun).
+- `stream: true` envoie le texte **au fil de l'écriture** de Gemini, morceau par
+  morceau ; les médias arrivent dans le dernier morceau.
+
+**Images** (format OpenAI) :
+
+```python
+reponse = client.images.generate(prompt="un renard roux dans la neige", size="1792x1024")
+print(reponse.data[0].url)          # lien signé : s'ouvre sans la clé (navigateur, <img>)
+# response_format="b64_json" donne l'image elle-même ; n=2 demande deux versions
+
+retouche = client.images.edit(image=open("photo.jpg", "rb"), prompt="mets le ciel en violet")
+# Gemini ne prend pas de masque : décris la zone à changer dans le prompt
+```
+
+Dans `/v1/chat/completions`, `"modalities": ["image", "text"]` (comme OpenRouter)
+ou `"media": "image" | "video" | "music"` fait créer le média : la réponse le
+donne dans `message.media` (liens signés), `message.images` (images en
+`data:`, format OpenRouter) et sous forme de liens dans le texte.
+
+**Vidéos et musique** :
+
+```
+curl -H "Authorization: Bearer <clé>" -H "Content-Type: application/json" ^
+     -d "{\"type\": \"video\", \"prompt\": \"une vague au ralenti\", \"wait\": false}" ^
+     http://192.168.1.10:8766/v1/media/generations
+```
+
+| Route | Rôle |
+|---|---|
+| `POST /v1/images/generations` `{prompt, n?, size?, response_format?, model?, provider?, redundancy?}` | image(s), format OpenAI (`model: "gpt-image-1"` → ChatGPT) |
+| `POST /v1/images/edits` (multipart `image`/`image[]`, `prompt`… ou JSON `{images, prompt}`) | retouche de photo(s), format OpenAI |
+| `POST /v1/media/generations` `{type, prompt, images?, n?, size?, response_format?, model?, provider?, redundancy?, wait?}` | image, vidéo ou musique, à partir d'images si `images` ; `wait: false` → 202 tout de suite |
+| `GET /v1/media/generations/{id}` | état (`in_progress`, `completed`, `failed`) et médias |
+| `GET /v1/media/{conversation}/{fichier}` | le fichier (`?sig=` d'un lien signé, ou la clé ; `?download=true`) |
+| `GET /v1/conversations/{id}` | une conversation de l'historique et ses médias |
+| `GET /health` | Agent First répond (sans clé) |
+
+Un lien signé ne donne accès qu'à son média ; régénérer la clé les invalide tous.
+L'API accepte les appels de pages web d'autres appareils (CORS) : la clé reste
+exigée.
 
 **Tâches Cowork** :
 
@@ -111,7 +250,7 @@ curl -H "Authorization: Bearer <clé>" -H "Content-Type: application/json" ^
 
 | Route | Rôle |
 |---|---|
-| `POST /v1/cowork` `{folder, request, model?, reasoning_effort?}` | lance une tâche → `{id, status}` |
+| `POST /v1/cowork` `{folder, request, model?, provider?, reasoning_effort?}` | lance une tâche → `{id, status}` (avec l'assistant choisi) |
 | `GET /v1/cowork/{id}/events` | étapes en direct (SSE) |
 | `GET /v1/cowork/{id}` | état, plan, résumé, bilan |
 | `POST /v1/cowork/{id}/decision` `{step, approve, always?}` | accord sur une action risquée |
@@ -122,7 +261,7 @@ Sans `reasoning_effort`, une tâche Cowork utilise le niveau par défaut de l'ap
 (Min.) : avec « Max. », Gemini peut abandonner une longue demande sans répondre.
 
 Les conversations de l'API apparaissent dans l'historique de l'app (marquées
-« api »), et une demande d'accord s'y signale aussi. Désactiver l'API :
+« api »), médias compris, et une demande d'accord s'y signale aussi. Désactiver l'API :
 `API_ACTIVE = False` dans `config.py`. **Quiconque a la clé peut faire agir
 Cowork sur ton PC** : garde-la pour toi et régénère-la au moindre doute.
 
@@ -133,7 +272,18 @@ Cowork sur ton PC** : garde-la pour toi et régénère-la au moindre doute.
 node --test tests/web/outils.test.mjs tests/web/outils_cowork.test.mjs  tests JavaScript
 .venv\Scripts\python -m pilote.modes                                    modèles et niveaux de Gemini
 .venv\Scripts\python -m pilote.essai "Bonjour"                          essai direct du pilote
+.venv\Scripts\python -m pilote.essai "Un chat roux" --outil image       essai d'une création (médias dans journaux\)
+.venv\Scripts\python -m pilote.essai "Décris" --joindre photo.jpg        essai d'une pièce jointe
 .venv\Scripts\python -m pilote.inspecter                                repères de la page Gemini
+.venv\Scripts\python -m pilote.inspecter --medias                       médias de la dernière réponse
+.venv\Scripts\python -m pilote.inspecter --site claude                  repères de la page de Claude (chatgpt, mistral…)
+.venv\Scripts\python -m pilote.essai "Bonjour" --site chatgpt           essai direct d'un autre assistant
 ```
+
+`tests/test_pilote_page.py` lance le pilote face à une fausse page Gemini (et une
+page à la façon de ChatGPT), dans le Chrome de `CHEMIN_CHROME` (sans fenêtre) :
+médias, fichiers joints, réponse en direct puis arrêtée, menu des modèles,
+limite atteinte. Il est passé si aucun Chrome ne démarre. `tests/test_redondance.py`
+vérifie le choix de l'assistant, le relais et l'API avec de faux assistants.
 
 Conception : `docs/superpowers/specs/` · Plans : `docs/superpowers/plans/`

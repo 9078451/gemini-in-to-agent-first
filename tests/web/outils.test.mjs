@@ -75,3 +75,53 @@ test("réglage par défaut bloqué : on prend un choix disponible", () => {
   assert.equal(choixDisponible([{ nom: "Max.", description: bloque, actif: true }], "Max."), "Max.");
   assert.equal(choixDisponible([], "Min."), null);
 });
+
+test("création de médias : attente, outil du message, avertissement, taille", async () => {
+  const { texteAttente, outilDuMessage, avertissementMedia, tailleFichier } = await import("../../agent_first/web/outils.js");
+  assert.equal(texteAttente(null), "Gemini réfléchit…");
+  assert.match(texteAttente("video"), /vidéo/);
+  assert.equal(outilDuMessage({ details: '{"outil": "image"}' }), "image");
+  assert.equal(outilDuMessage({ details: null }), null);
+  assert.equal(outilDuMessage({ details: "{cassé" }), null);
+  assert.equal(avertissementMedia(null, []), null);
+  assert.equal(avertissementMedia("image", [{ type: "image" }]), null);
+  assert.match(avertissementMedia("image", []), /pas renvoyé d'image/);
+  assert.match(avertissementMedia("musique", [{ type: "image" }]), /pas renvoyé de musique/);
+  assert.match(avertissementMedia(null, [], 2), /non récupérés : 2/);
+  assert.equal(tailleFichier(512), "512 o");
+  assert.equal(tailleFichier(1536), "1,5 Ko");
+  assert.equal(tailleFichier(25 * 1024 * 1024), "25 Mo");
+});
+
+test("pièces jointes : limites et refus expliqués", async () => {
+  const { trierPieces, MAX_OCTETS_PIECE, estInterrompue } = await import("../../agent_first/web/outils.js");
+  const f = (name, size) => ({ name, size });
+  const { acceptees, refus } = trierPieces(9, [f("a.png", 10), f("b.png", 10), f("gros.mp4", MAX_OCTETS_PIECE + 1), f("vide.txt", 0)]);
+  assert.deepEqual(acceptees.map((x) => x.name), ["a.png"]);
+  assert.equal(refus.length, 3);
+  assert.match(refus[0], /^b\.png : 10 fichiers au plus/);
+  assert.match(refus[1], /^gros\.mp4 : plus de 50 Mo/);
+  assert.equal(estInterrompue({ details: '{"interrompue": true}' }), true);
+  assert.equal(estInterrompue({ details: null }), false);
+});
+
+test("plusieurs assistants : nom, relais, outils possibles", async () => {
+  const { fournisseurDuMessage, libelleDe, metaMessage, outilPossible, texteAttente, texteRelais, avertissementMedia } = await import("../../agent_first/web/outils.js");
+  const fournisseurs = [{ nom: "gemini", libelle: "Gemini", outils: ["image", "video", "musique"] }, { nom: "chatgpt", libelle: "ChatGPT", outils: ["image"] }, { nom: "claude", libelle: "Claude", outils: [] }];
+  assert.equal(fournisseurDuMessage({ details: '{"fournisseur": "chatgpt"}' }), "chatgpt");
+  assert.equal(fournisseurDuMessage({ details: null }), "gemini");
+  assert.equal(fournisseurDuMessage({ details: "{cassé" }), "gemini");
+  assert.equal(libelleDe(fournisseurs, "chatgpt"), "ChatGPT");
+  assert.equal(libelleDe(fournisseurs, "grok"), "Grok"); // pas encore chargé : son nom, en majuscule
+  assert.equal(metaMessage({ modele: "Thinking", niveau: null, duree: 3 }, "ChatGPT"), "ChatGPT · Thinking · 3 s");
+  assert.equal(texteAttente(null, "Claude"), "Claude réfléchit…");
+  assert.equal(texteAttente("image", "ChatGPT"), "ChatGPT crée l'image…");
+  assert.match(avertissementMedia("image", [], 0, "ChatGPT"), /^ChatGPT n'a pas renvoyé d'image/);
+  assert.equal(outilPossible(fournisseurs[1], "image"), true);
+  assert.equal(outilPossible(fournisseurs[1], "video"), false);
+  assert.equal(outilPossible(fournisseurs[2], null), true);
+  assert.equal(outilPossible(undefined, "image"), false);
+  const relais = texteRelais({ texte: "Gemini → ChatGPT", details: JSON.stringify({ de: "Gemini", vers: "ChatGPT", raison: "limite" }) });
+  assert.deepEqual(relais, { texte: "ChatGPT a pris le relais de Gemini", raison: "limite" });
+  assert.deepEqual(texteRelais({ texte: "Gemini → ChatGPT", details: null }), { texte: "Gemini → ChatGPT", raison: "" });
+});

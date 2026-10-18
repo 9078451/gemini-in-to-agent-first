@@ -123,15 +123,15 @@ def test_statistiques(historique):
     historique.ajouter_message(a.id, "gemini", "R2", modele="3.1 Pro", duree=20.0)
     b = historique.creer()
     historique.ajouter_message(b.id, "toi", "Q3")
-    historique.ajouter_message(b.id, "gemini", "R3", modele="4 Argon", duree=6.0)
+    historique.ajouter_message(b.id, "gemini", "R3", modele="4 Argon", duree=6.0, medias=[{"id": "x"}, {"id": "y"}])
     assert historique.statistiques("7j") == {
-        "conversations": 2, "messages": 3, "modele_favori": "3.1 Pro", "temps_moyen": 12.0,
+        "conversations": 2, "messages": 3, "modele_favori": "3.1 Pro", "temps_moyen": 12.0, "medias": 2,
     }
 
 
 def test_statistiques_vides(historique):
     assert historique.statistiques("tout") == {
-        "conversations": 0, "messages": 0, "modele_favori": None, "temps_moyen": None,
+        "conversations": 0, "messages": 0, "modele_favori": None, "temps_moyen": None, "medias": 0,
     }
 
 
@@ -206,3 +206,34 @@ def test_tours_gemini_comptes_puis_remis_a_zero(historique):
     historique.repartir(c.id)
     lue = historique.conversation(c.id)
     assert lue.tours_gemini == 0 and lue.adresse is None
+
+
+def test_medias_gardes_avec_le_message(historique):
+    c = historique.creer()
+    decrits = [{"id": f"{c.id}/0123456789ab.png", "type": "image", "mime": "image/png", "octets": 3, "description": "un chat"}]
+    ajoute = historique.ajouter_message(c.id, "gemini", "Voici l'image", medias=decrits)
+    assert ajoute.medias == decrits
+    sans = historique.ajouter_message(c.id, "gemini", "Texte seul")
+    assert sans.medias == []
+    assert [m.medias for m in historique.messages(c.id)] == [decrits, []]
+
+
+def test_migration_ajoute_medias(tmp_path, horloge):
+    import sqlite3
+
+    fichier = tmp_path / "v3.db"
+    base = sqlite3.connect(fichier)
+    base.executescript(
+        """CREATE TABLE conversations (id TEXT PRIMARY KEY, titre TEXT NOT NULL DEFAULT '', adresse TEXT,
+           modele TEXT, niveau TEXT, cree_le TEXT NOT NULL, modifie_le TEXT NOT NULL);
+           CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL,
+           role TEXT NOT NULL, texte TEXT NOT NULL, html TEXT, modele TEXT, niveau TEXT, duree REAL,
+           details TEXT, cree_le TEXT NOT NULL);
+           INSERT INTO conversations (id, cree_le, modifie_le) VALUES ('x', '2026-10-01', '2026-10-01');
+           INSERT INTO messages (conversation_id, role, texte, cree_le) VALUES ('x', 'toi', 'Bonjour', '2026-10-01');"""
+    )
+    base.commit()
+    base.close()
+    historique = Historique(fichier, horloge)
+    assert historique.messages("x")[0].medias == []
+    assert historique.ajouter_message("x", "gemini", "R", medias=[{"id": "a"}]).medias == [{"id": "a"}]

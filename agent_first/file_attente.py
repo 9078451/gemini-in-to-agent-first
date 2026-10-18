@@ -9,6 +9,7 @@ import logging
 import queue
 import threading
 from concurrent.futures import Future
+from concurrent.futures import TimeoutError as DelaiFutur
 from typing import Callable, TypeVar
 
 from pilote.erreurs import ErreurPilote
@@ -28,6 +29,17 @@ def rechauffer(file: "FileAttente") -> Future:
         lambda f: f.exception() is not None and journal.warning("Gemini pas prêt au démarrage : %s", f.exception())
     )
     return futur
+
+
+def attendre(futur: "Future[T]", delai: float) -> T:
+    """Le résultat de `futur`. Après `delai` (TimeoutError), la demande est retirée de la
+    file si elle n'a pas commencé : sinon elle partirait plus tard vers Gemini, alors que
+    personne n'attend plus sa réponse."""
+    try:
+        return futur.result(timeout=delai)
+    except DelaiFutur:
+        futur.cancel()
+        raise
 
 
 class FileAttente:
@@ -52,6 +64,10 @@ class FileAttente:
             self._en_attente += 1
         self._taches.put((travail, futur))
         return futur
+
+    def pilote_pret(self) -> bool:
+        """Le pilote a été fabriqué (l'onglet du site a servi au moins une fois)."""
+        return self._pilote is not None
 
     def occupee(self) -> bool:
         """Une demande tourne ou attend son tour (une tâche Cowork peut durer des minutes)."""

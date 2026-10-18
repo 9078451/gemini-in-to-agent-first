@@ -6,14 +6,18 @@ Fonctions pures : tout ce qui touche à Gemini, à l'historique ou au réseau es
 """
 import hashlib
 import json
+import mimetypes
 import re
 import socket
 import time
 import uuid
 from typing import Iterator
 
-EFFORTS = {"minimal": "Min.", "low": "Min.", "medium": "Moyen", "high": "Max."}
+EFFORTS = {"none": "Min.", "minimal": "Min.", "low": "Min.", "medium": "Moyen", "high": "Max.", "xhigh": "Max."}
 ROLES_SYSTEME = ("system", "developer")
+# Noms qui désignent « le modèle déjà choisi dans Gemini » (clients qui imposent un nom).
+MODELES_COURANTS = {"", "agent-first", "default", "auto", "gemini"}
+PIECES_JOINTES = {"image_url": "image", "input_image": "image", "input_audio": "son", "file": "fichier", "input_file": "fichier"}
 
 
 def niveau_depuis_effort(effort: str | None) -> str | None:
@@ -22,14 +26,67 @@ def niveau_depuis_effort(effort: str | None) -> str | None:
 
 
 def texte_message(contenu) -> str:
-    """Le texte d'un message OpenAI (chaîne, ou liste de morceaux dont on garde le texte)."""
+    """Le texte d'un message OpenAI (chaîne, ou liste de morceaux dont on garde le texte).
+    Une pièce jointe (image, son, fichier) y est signalée à sa place : « [image jointe] »."""
     if isinstance(contenu, str):
         return contenu
     if isinstance(contenu, list):
-        return "\n".join(
-            m.get("text", "") for m in contenu if isinstance(m, dict) and m.get("type") in ("text", "input_text")
-        )
+        morceaux = []
+        for m in contenu:
+            if not isinstance(m, dict):
+                continue
+            if m.get("type") in ("text", "input_text"):
+                morceaux.append(m.get("text", ""))
+            elif m.get("type") in PIECES_JOINTES:
+                morceaux.append(f"[{PIECES_JOINTES[m['type']]} joint{'' if m['type'] in ('input_audio', 'file', 'input_file') else 'e'}]")
+        return "\n".join(morceaux)
     return "" if contenu is None else str(contenu)
+
+
+def resoudre_modele_site(demande: str, disponibles: list[str], ignores: tuple[str, ...] = ()) -> str | None:
+    """Le modèle de ChatGPT, Claude… qu'un client désigne à la façon de leur API
+    (« claude-opus-4-1 » → « Opus 4.1 », « gpt-5-thinking » → « Thinking ») : celui dont le
+    nom contient le plus de mots de la demande (les nombres départagent), s'il est seul en tête.
+    `ignores` : les mots qui ne désignent que l'assistant (« claude », « gpt »)."""
+    exacts = [nom for nom in disponibles if nom.strip().lower() == demande.strip().lower()]
+    if exacts:
+        return exacts[0]
+    mots = [m for m in re.split(r"[^a-z0-9.]+", demande.lower()) if m and m not in ignores]
+
+    def score(nom: str) -> int:
+        compact = re.sub(r"[^a-z0-9.]", "", nom.lower())
+        return sum((1 if m.replace(".", "").isdigit() else 10) for m in mots if m in compact)
+
+    scores = sorted(((score(nom), nom) for nom in disponibles), reverse=True)
+    if not scores or scores[0][0] < 10 or (len(scores) > 1 and scores[1][0] == scores[0][0]):
+        return None
+    return scores[0][1]
+
+
+def resoudre_modele(demande: str | None, disponibles: list[str]) -> str | None:
+    """Le modèle de Gemini qu'un client désigne, souvent à sa façon (« gemini-3.1-pro »,
+    « 3.1-pro-preview », « argon ») ; None = celui déjà choisi dans Gemini (« agent-first »,
+    ou un nom inconnu comme « gpt-4o » : mieux vaut répondre que refuser)."""
+    if demande is None or demande.strip().lower() in MODELES_COURANTS:
+        return None
+    if demande in disponibles:
+        return demande
+
+    def norme(nom: str) -> str:
+        return re.sub(r"[^a-z0-9.]", "", nom.lower().replace("gemini", ""))
+
+    voulu = norme(demande)
+    if not voulu:
+        return None
+    normes = {nom: norme(nom) for nom in disponibles}
+    exacts = [nom for nom, n in normes.items() if n == voulu]
+    if exacts:
+        return exacts[0]
+    prefixes = [nom for nom, n in normes.items() if n and voulu.startswith(n)]  # « 3.1-pro-preview »
+    if prefixes:
+        return max(prefixes, key=lambda nom: len(normes[nom]))
+    contenant = [nom for nom, n in normes.items() if voulu in n]  # « argon » → « 4 Argon »
+    return contenant[0] if len(contenant) == 1 else None
 
 
 def empreinte(modele: str | None, messages: list[dict]) -> str:
@@ -56,7 +113,11 @@ def mettre_a_plat(messages: list[dict]) -> str:
             f"{'Assistant' if m.get('role') == 'assistant' else 'User'}: {texte_message(m.get('content'))}" for m in avant
         ]
         parties.append("[Conversation so far]\n" + "\n\n".join(lignes))
-    parties.append("[New message]\n" + texte_message(dernier.get("content")))
+    # Sans cette consigne, Gemini commente parfois la transcription ou répond « Assistant: … ».
+    parties.append(
+        "[New message — answer it directly, following the instructions above; no \"Assistant:\" prefix]\n"
+        + texte_message(dernier.get("content"))
+    )
     return "\n\n".join(parties)
 
 
@@ -69,24 +130,26 @@ def estimer_jetons(texte: str) -> int:
     return max(1, len(texte) // 4)
 
 
-def completion(contenu: str, modele: str, invite: str) -> dict:
+def completion(contenu: str, modele: str, invite: str, extras: dict | None = None) -> dict:
+    """`extras` s'ajoute au message (médias : `images`, `media`)."""
     entree, sortie = estimer_jetons(invite), estimer_jetons(contenu)
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
         "object": "chat.completion",
         "created": int(time.time()),
         "model": modele,
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": contenu}, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": contenu, **(extras or {})},
+                     "finish_reason": "stop"}],
         "usage": {"prompt_tokens": entree, "completion_tokens": sortie, "total_tokens": entree + sortie},
     }
 
 
-def morceaux(contenu: str, modele: str) -> Iterator[str]:
+def morceaux(contenu: str, modele: str, extras: dict | None = None) -> Iterator[str]:
     """La réponse en flux SSE au format OpenAI : Gemini web étant lu à la fin, un seul morceau."""
     base = {"id": f"chatcmpl-{uuid.uuid4().hex[:24]}", "object": "chat.completion.chunk",
             "created": int(time.time()), "model": modele}
     for choix in (
-        {"index": 0, "delta": {"role": "assistant", "content": contenu}, "finish_reason": None},
+        {"index": 0, "delta": {"role": "assistant", "content": contenu, **(extras or {})}, "finish_reason": None},
         {"index": 0, "delta": {}, "finish_reason": "stop"},
     ):
         yield f"data: {json.dumps({**base, 'choices': [choix]}, ensure_ascii=False)}\n\n"
@@ -156,3 +219,48 @@ def choisir_adresse(par_defaut: str | None, toutes: list[str]) -> str:
 
     candidates = [a for a in dict.fromkeys([par_defaut, *toutes]) if a and not a.startswith(("127.", "169.254."))]
     return min(candidates, key=rang) if candidates else "127.0.0.1"
+
+
+def pieces_du_message(contenu) -> list[tuple[str, str | None]]:
+    """Les pièces jointes d'un message OpenAI : (adresse `data:` ou `http(s)`, nom ou None).
+    Formats : `image_url`, `input_image`, `file` / `input_file` (`file_data`, `file_url`),
+    `input_audio`."""
+    if not isinstance(contenu, list):
+        return []
+    pieces = []
+    for m in contenu:
+        if not isinstance(m, dict):
+            continue
+        sorte = m.get("type")
+        if sorte in ("image_url", "input_image"):
+            image = m.get("image_url")
+            url = image.get("url") if isinstance(image, dict) else image
+            if isinstance(url, str) and url:
+                pieces.append((url, None))
+        elif sorte in ("file", "input_file"):
+            fichier = m.get("file") if isinstance(m.get("file"), dict) else m
+            nom, donnees = fichier.get("filename"), fichier.get("file_data")
+            if isinstance(donnees, str) and donnees:
+                if not donnees.startswith("data:"):
+                    mime = mimetypes.guess_type(nom or "")[0] or "application/octet-stream"
+                    donnees = f"data:{mime};base64,{donnees}"
+                pieces.append((donnees, nom))
+            elif isinstance(fichier.get("file_url"), str):
+                pieces.append((fichier["file_url"], nom))
+        elif sorte == "input_audio":
+            audio = m.get("input_audio") or {}
+            if isinstance(audio.get("data"), str):
+                format_ = re.sub(r"[^a-z0-9]", "", str(audio.get("format") or "wav").lower()) or "wav"
+                pieces.append((f"data:audio/{'mpeg' if format_ == 'mp3' else format_};base64,{audio['data']}", f"audio.{format_}"))
+    return pieces
+
+
+def morceau(base: dict, delta: dict, fin: str | None = None) -> str:
+    """Un morceau du flux SSE au format OpenAI."""
+    return f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': delta, 'finish_reason': fin}]}, ensure_ascii=False)}\n\n"
+
+
+def suite_du_texte(envoye: str, texte: str) -> str | None:
+    """Ce qu'il faut ajouter à `envoye` pour arriver à `texte` ; None si `texte` ne le
+    prolonge pas (Gemini a réécrit le début : on attend la suite)."""
+    return texte[len(envoye):] if texte.startswith(envoye) else None

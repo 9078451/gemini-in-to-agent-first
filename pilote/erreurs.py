@@ -11,18 +11,25 @@ class ChromeInjoignable(ErreurPilote):
 
 
 class PasConnecteGoogle(ErreurPilote):
-    def __init__(self) -> None:
+    """Le compte du site (Google pour Gemini, OpenAI pour ChatGPT…) n'est pas connecté."""
+
+    def __init__(self, compte: str = "Google") -> None:
+        self.compte = compte
         super().__init__(
-            "Connecte-toi à Google dans la fenêtre Chrome dédiée, puis renvoie ton message."
+            f"Connecte-toi à {compte} dans la fenêtre Chrome dédiée, puis renvoie ton message."
         )
 
 
 class VerificationGoogle(ErreurPilote):
-    def __init__(self) -> None:
+    def __init__(self, compte: str = "Google") -> None:
         super().__init__(
-            "Google demande une vérification : fais-la toi-même dans la fenêtre "
+            f"{compte} demande une vérification : fais-la toi-même dans la fenêtre "
             "Chrome dédiée, puis renvoie ton message."
         )
+
+
+PasConnecte = PasConnecteGoogle
+VerificationRequise = VerificationGoogle
 
 
 class RepereIntrouvable(ErreurPilote):
@@ -77,12 +84,45 @@ class ChoixBloque(ErreurPilote):
         )
 
 
-class LimiteGemini(ErreurPilote):
-    def __init__(self, bandeau: str) -> None:
+class LimiteAtteinte(ErreurPilote):
+    """Le site est saturé, ou le compte n'a plus de messages ou de crédits pour l'instant."""
+
+    def __init__(self, site: str, detail: str) -> None:
+        self.site = site
+        self.detail = detail
         super().__init__(
+            f"{site} est saturé ou ton compte a atteint sa limite (« {detail} »). "
+            "Choisis un autre modèle, ou active la redondance pour passer automatiquement au suivant."
+        )
+
+
+class LimiteGemini(LimiteAtteinte):
+    def __init__(self, bandeau: str) -> None:
+        self.site, self.detail = "Gemini", bandeau
+        ErreurPilote.__init__(
+            self,
             f"Ton compte Gemini a atteint sa limite d'utilisation (« {bandeau} »). "
             "Gemini n'accepte plus de message pour l'instant : choisis un modèle plus léger "
             "(par exemple Flash) ou attends l'heure indiquée."
+        )
+
+
+class PieceRefusee(ErreurPilote):
+    def __init__(self, nom: str) -> None:
+        self.nom = nom
+        super().__init__(
+            f"Gemini n'a pas accepté la pièce jointe « {nom} » (collée, déposée puis choisie avec « + »). "
+            "Vérifie qu'il accepte ce type de fichier, ou joins-le toi-même dans la fenêtre Chrome dédiée."
+        )
+
+
+class PageInstable(ErreurPilote):
+    """La page de Gemini a changé sous le pilote (onglet fermé ou rechargé, Chrome relancé)."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(
+            "La page Gemini a changé pendant l'envoi (onglet fermé ou rechargé ?). "
+            f"Vérifie la fenêtre Chrome dédiée, puis renvoie ton message. Détail : {detail}"
         )
 
 

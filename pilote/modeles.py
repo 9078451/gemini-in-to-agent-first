@@ -1,6 +1,20 @@
 """Ce que le pilote renvoie, et ce qu'Agent First attend d'un pilote."""
 from dataclasses import dataclass
-from typing import Protocol
+from threading import Event
+from typing import Callable, Protocol
+
+# Ce que Gemini sait créer en plus du texte : le pilote coche l'outil correspondant.
+OUTILS = ("image", "video", "musique")
+
+
+@dataclass(frozen=True)
+class Media:
+    """Une image, une vidéo ou un son de la réponse, téléchargé depuis la page."""
+
+    type: str  # « image », « video » ou « audio »
+    mime: str  # ex. image/png
+    donnees: bytes
+    description: str = ""  # texte alternatif lu dans la page
 
 
 @dataclass(frozen=True)
@@ -11,6 +25,9 @@ class ResultatGemini:
     modele: str | None = None
     niveau: str | None = None
     duree: float = 0.0  # secondes entre l'envoi et la fin de la réponse
+    medias: tuple[Media, ...] = ()
+    medias_perdus: int = 0  # médias vus dans la réponse mais impossibles à télécharger
+    interrompue: bool = False  # arrêtée à la demande de l'utilisateur : `reponse` est le début
 
 
 @dataclass(frozen=True)
@@ -42,6 +59,10 @@ class Pilote(Protocol):
         modele: str | None = None,
         niveau: str | None = None,
         delai: float | None = None,
+        outil: str | None = None,
+        pieces: tuple[Media, ...] = (),
+        au_fil: Callable[[str], None] | None = None,
+        arret: Event | None = None,
     ) -> ResultatGemini: ...
 
     def preparer(self) -> None: ...

@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import uuid
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     dossier TEXT,
     source TEXT NOT NULL DEFAULT 'app',
     tours_gemini INTEGER NOT NULL DEFAULT 0,
+    fournisseur TEXT NOT NULL DEFAULT 'gemini',
     cree_le TEXT NOT NULL,
     modifie_le TEXT NOT NULL
 );
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS messages (
     niveau TEXT,
     duree REAL,
     details TEXT,
+    medias TEXT,
     cree_le TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id);
@@ -47,13 +49,13 @@ CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id);
 # Colonnes ajoutées après la v2 : migrées à l'ouverture des bases existantes.
 COLONNES_AJOUTEES = {
     "conversations": [("mode", "TEXT NOT NULL DEFAULT 'chat'"), ("dossier", "TEXT"), ("source", "TEXT NOT NULL DEFAULT 'app'"),
-                      ("tours_gemini", "INTEGER NOT NULL DEFAULT 0")],
-    "messages": [("details", "TEXT")],
+                      ("tours_gemini", "INTEGER NOT NULL DEFAULT 0"), ("fournisseur", "TEXT NOT NULL DEFAULT 'gemini'")],
+    "messages": [("details", "TEXT"), ("medias", "TEXT")],
 }
 COLONNES_CONVERSATION = """c.id, c.titre, c.adresse, c.modele, c.niveau, c.mode, c.dossier, c.source, c.tours_gemini,
-    c.cree_le, c.modifie_le,
+    c.fournisseur, c.cree_le, c.modifie_le,
     (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id) AS nb_messages"""
-COLONNES_MESSAGE = "id, conversation_id, role, texte, html, modele, niveau, duree, details, cree_le"
+COLONNES_MESSAGE = "id, conversation_id, role, texte, html, modele, niveau, duree, details, cree_le, medias"
 NON_VIDE = "EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)"
 
 
@@ -75,6 +77,7 @@ class Conversation:
     source: str = "app"  # « app » ou « api » (créée par un autre programme via l'API réseau)
     tours_gemini: int = 0  # messages envoyés dans la conversation Gemini en cours (Cowork)
     nb_messages: int = 0
+    fournisseur: str = "gemini"  # l'assistant qui répond : « gemini », « chatgpt », « claude »…
 
 
 @dataclass(frozen=True)
@@ -89,6 +92,14 @@ class Message:
     duree: float | None
     details: str | None
     cree_le: str
+    # Images, vidéos, sons de la réponse (voir `mediatheque`) : id, type, mime, octets, description.
+    medias: list[dict] = field(default_factory=list)
+
+
+def _message(ligne: sqlite3.Row) -> Message:
+    valeurs = dict(ligne)
+    valeurs["medias"] = json.loads(valeurs["medias"]) if valeurs.get("medias") else []
+    return Message(**valeurs)
 
 
 def titre_depuis(texte: str) -> str:
@@ -112,13 +123,14 @@ class Historique:
         mode: str = "chat",
         dossier: str | None = None,
         source: str = "app",
+        fournisseur: str = "gemini",
     ) -> Conversation:
         with self._verrou:
             identifiant, date = uuid.uuid4().hex, self._date()
             self._base.execute(
-                """INSERT INTO conversations (id, modele, niveau, mode, dossier, source, cree_le, modifie_le)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (identifiant, modele, niveau, mode, dossier, source, date, date),
+                """INSERT INTO conversations (id, modele, niveau, mode, dossier, source, fournisseur, cree_le, modifie_le)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (identifiant, modele, niveau, mode, dossier, source, fournisseur, date, date),
             )
             self._base.commit()
             return self._conversation(identifiant)
@@ -155,6 +167,18 @@ class Historique:
             self._base.execute("UPDATE conversations SET adresse = NULL, tours_gemini = 0 WHERE id = ?", (identifiant,))
             self._base.commit()
 
+    def basculer(self, identifiant: str, fournisseur: str, modele: str | None = None) -> None:
+        """La conversation continue avec un autre assistant : nouvelle conversation de son côté
+        (adresse oubliée), son modèle à lui."""
+        with self._verrou:
+            self._conversation(identifiant)
+            self._base.execute(
+                """UPDATE conversations SET fournisseur = ?, adresse = NULL, tours_gemini = 0, modele = ?, niveau = NULL
+                   WHERE id = ?""",
+                (fournisseur, modele, identifiant),
+            )
+            self._base.commit()
+
     def enregistrer_adresse(self, identifiant: str, adresse: str) -> None:
         with self._verrou:
             self._conversation(identifiant)
@@ -175,7 +199,7 @@ class Historique:
             lignes = self._base.execute(
                 f"SELECT {COLONNES_MESSAGE} FROM messages WHERE conversation_id = ? ORDER BY id", (identifiant,)
             ).fetchall()
-        return [Message(**dict(ligne)) for ligne in lignes]
+        return [_message(ligne) for ligne in lignes]
 
     def ajouter_message(
         self,
@@ -187,15 +211,17 @@ class Historique:
         niveau: str | None = None,
         duree: float | None = None,
         details: str | None = None,
+        medias: list[dict] | None = None,
     ) -> Message:
         with self._verrou:
             conversation = self._conversation(identifiant)
             date = self._date()
             curseur = self._base.execute(
                 """INSERT INTO messages
-                   (conversation_id, role, texte, html, modele, niveau, duree, details, cree_le)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (identifiant, role, texte, html, modele, niveau, duree, details, date),
+                   (conversation_id, role, texte, html, modele, niveau, duree, details, medias, cree_le)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (identifiant, role, texte, html, modele, niveau, duree, details,
+                 json.dumps(medias, ensure_ascii=False) if medias else None, date),
             )
             titre = conversation.titre or (titre_depuis(texte) if role == "toi" else "")
             self._base.execute(
@@ -207,7 +233,7 @@ class Historique:
             ligne = self._base.execute(
                 f"SELECT {COLONNES_MESSAGE} FROM messages WHERE id = ?", (curseur.lastrowid,)
             ).fetchone()
-        return Message(**dict(ligne))
+        return _message(ligne)
 
     def ajouter_etape(self, identifiant: str, evenement: dict) -> Message:
         """Enregistre une étape Cowork : rôle « cowork », texte = type, détails en JSON."""
@@ -229,6 +255,24 @@ class Historique:
             ).fetchone()
         return json.loads(ligne["details"]) if ligne and ligne["details"] else None
 
+    def medias_recents(self, limite: int = 60, type_media: str | None = None) -> list[dict]:
+        """Les derniers médias créés par Gemini (le plus récent d'abord), avec leur conversation."""
+        trouves: list[dict] = []
+        with self._verrou:
+            lignes = self._base.execute(
+                """SELECT m.medias, m.conversation_id, m.cree_le, c.titre FROM messages m
+                   JOIN conversations c ON c.id = m.conversation_id
+                   WHERE m.role = 'gemini' AND m.medias IS NOT NULL ORDER BY m.id DESC""",
+            )
+            for ligne in lignes:
+                for media in reversed(json.loads(ligne["medias"])):
+                    if type_media is None or media.get("type") == type_media:
+                        trouves.append({**media, "conversation_id": ligne["conversation_id"],
+                                        "titre": ligne["titre"], "cree_le": ligne["cree_le"]})
+                if len(trouves) >= limite:
+                    break
+        return trouves[:limite]
+
     # ---- statistiques ---------------------------------------------------
 
     def statistiques(self, periode: str = "7j") -> dict:
@@ -242,7 +286,7 @@ class Historique:
                 "SELECT count(*) FROM messages WHERE role = 'toi' AND (? IS NULL OR cree_le >= ?)", (depuis, depuis)
             ).fetchone()[0]
             reponses = self._base.execute(
-                "SELECT modele, duree FROM messages WHERE role = 'gemini' AND (? IS NULL OR cree_le >= ?)",
+                "SELECT modele, duree, medias FROM messages WHERE role = 'gemini' AND (? IS NULL OR cree_le >= ?)",
                 (depuis, depuis),
             ).fetchall()
         modeles = Counter(r["modele"] for r in reponses if r["modele"])
@@ -252,6 +296,7 @@ class Historique:
             "messages": messages,
             "modele_favori": modeles.most_common(1)[0][0] if modeles else None,
             "temps_moyen": round(sum(durees) / len(durees), 1) if durees else None,
+            "medias": sum(len(json.loads(r["medias"])) for r in reponses if r["medias"]),
         }
 
     # ---- interne --------------------------------------------------------

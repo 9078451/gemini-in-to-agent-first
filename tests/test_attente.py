@@ -153,3 +153,25 @@ def test_sans_signal_de_generation_la_stabilite_longue_reste():
     attendre_fin_reponse(lambda: "abc", lambda: False, delai_max=180.0, stabilite=2.0,
                          intervalle=0.5, horloge=horloge, dormir=horloge.dormir)
     assert horloge.t >= 2.0
+
+
+def test_texte_transmis_au_fil_de_l_ecriture():
+    h = Horloge()
+    vus = []
+    lire = suite_de_textes("", "Bon", "Bonjour", "Bonjour !")
+    attendre_fin_reponse(lire, lambda: False, delai_max=60, stabilite=2.0, intervalle=0.5, horloge=h,
+                         dormir=h.dormir, au_fil=vus.append)
+    assert vus == ["Bon", "Bonjour", "Bonjour !"]
+
+
+def test_arret_rend_le_texte_deja_ecrit():
+    from pilote.attente import Interrompue
+
+    h = Horloge()
+    with pytest.raises(Interrompue) as arret:
+        attendre_fin_reponse(lambda: "Début", lambda: True, delai_max=60, stabilite=2.0, intervalle=0.5,
+                             horloge=h, dormir=h.dormir, doit_arreter=lambda: h.t >= 3)
+    assert arret.value.partiel == "Début"
+    with pytest.raises(Interrompue):
+        attendre_nouvelle_reponse(lambda: 0, lambda: 1, lambda: True, 0, 1, delai=60, horloge=h,
+                                  dormir=h.dormir, doit_arreter=lambda: True)

@@ -1,7 +1,12 @@
 """La clé de l'API réseau : créée au premier lancement, gardée dans `donnees/`,
 exigée sur chaque appel. Trop d'essais faux depuis une même adresse la bloquent
 un moment (on ne devine pas une clé en essayant en boucle).
+
+Elle signe aussi les liens des médias : un lien signé s'ouvre sans en-tête (balise
+<img>, navigateur, lecteur vidéo) mais ne donne accès qu'à ce média, et cesse de
+marcher quand la clé est régénérée.
 """
+import hashlib
 import hmac
 import secrets
 import threading
@@ -71,3 +76,10 @@ class GardeCle:
                 recents = []
             self._echecs[adresse] = recents
             return 401
+
+    def signer(self, chemin: str) -> str:
+        """La signature d'un lien (« <conversation>/<fichier> ») : sans elle, le lien exige la clé."""
+        return hmac.new(self._cle.encode(), chemin.encode(), hashlib.sha256).hexdigest()[:32]
+
+    def signature_valide(self, chemin: str, signature: str | None) -> bool:
+        return bool(signature) and hmac.compare_digest(signature.encode(), self.signer(chemin).encode())

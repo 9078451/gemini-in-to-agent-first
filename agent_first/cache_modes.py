@@ -13,16 +13,20 @@ journal = logging.getLogger(__name__)
 
 
 class CacheModes:
-    def __init__(self, file_chat: FileAttente, chrome_lance, par_defaut: Modes) -> None:
+    def __init__(self, file_chat: FileAttente, chrome_lance, par_defaut: Modes, paresseux: bool = False) -> None:
         self._file = file_chat
         self._chrome_lance = chrome_lance
         self._par_defaut = par_defaut
         self._modes: Modes | None = None
+        # Un site dont la fenêtre n'a pas encore servi : lire ses modèles l'ouvrirait. On attend
+        # son premier message ; la liste par défaut sert jusque-là.
+        self._paresseux = paresseux
 
     def lire(self) -> Modes:
         # Onglet du Chat occupé (une longue réponse) : on n'attend pas son tour,
         # la liste par défaut sert et la vraie sera lue quand il sera libre.
-        if self._modes is None and self._chrome_lance() and not self._file.occupee():
+        ouvert = not self._paresseux or self._file.pilote_pret()
+        if self._modes is None and ouvert and self._chrome_lance() and not self._file.occupee():
             futur = self._file.soumettre(lambda pilote: pilote.lister_modes())
             try:
                 lus = futur.result(timeout=30)

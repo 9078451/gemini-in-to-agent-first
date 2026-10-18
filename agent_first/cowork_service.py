@@ -82,8 +82,11 @@ class ServiceCowork:
         diffuseur: Diffuseur | None = None,
         max_entrees: int = 150,
         tours_max: int = 30,
+        files: dict[str, FileAttente] | None = None,
     ) -> None:
         self._file = file
+        # Les tâches d'une conversation confiée à un autre assistant (ChatGPT, Claude…) passent par sa file.
+        self._files = files or {}
         self._historique = historique
         self._fabrique_executeur = fabrique_executeur
         self._reglages = reglages
@@ -108,7 +111,8 @@ class ServiceCowork:
     # ---- lancer une tâche -----------------------------------------------
 
     def demarrer(
-        self, conversation_id: str, dossier: str, adresse: str | None, texte: str, modele, niveau
+        self, conversation_id: str, dossier: str, adresse: str | None, texte: str, modele, niveau,
+        fournisseur: str = "gemini",
     ) -> None:
         """Lance la tâche et enregistre le message de l'utilisateur, une fois la conversation
         réservée : refusé (TacheEnCours), il ne laisse rien dans l'historique."""
@@ -182,7 +186,7 @@ class ServiceCowork:
             finally:
                 self._finir(session)
 
-        self._file.soumettre(travail)
+        self._files.get(fournisseur, self._file).soumettre(travail)
 
     def _preparer(
         self, conversation_id: str, dossier: Path, texte: str, processus: GestionnaireProcessus
