@@ -32,9 +32,16 @@ class PiloteMedias:
         self.duree = 0.0
         self.erreur: Exception | None = None
         self.reponses: list[tuple[Media, ...]] = []  # médias de chaque réponse, dans l'ordre
+        self.pieces: list[tuple] = []
 
-    def envoyer(self, adresse, texte, modele=None, niveau=None, delai=None, outil=None):
+    def envoyer(self, adresse, texte, modele=None, niveau=None, delai=None, outil=None, pieces=(), au_fil=None,
+                arret=None):
         self.envois.append({"adresse": adresse, "texte": texte, "modele": modele, "niveau": niveau, "outil": outil})
+        self.pieces.append(pieces)
+        for morceau in ("Gemini a dit\nVoi", "Gemini a dit\nVoilà"):
+            if au_fil is not None:
+                au_fil(morceau)
+                time.sleep(0.05)
         time.sleep(self.duree)
         if self.erreur:
             raise self.erreur
@@ -209,7 +216,8 @@ def test_flux_garde_la_connexion_puis_repond(monte, monkeypatch):
     client, pilote, _ = monte()
     pilote.duree = 0.3
     r = client.post("/v1/chat/completions", json={"stream": True, "messages": [{"role": "user", "content": "x"}]})
-    assert r.text.startswith(": ping") and "Voilà." in r.text and r.text.rstrip().endswith("data: [DONE]")
+    assert ": ping" in r.text and r.text.rstrip().endswith("data: [DONE]")
+    assert contenu_du_flux(r) == "Voilà."
 
 
 def test_flux_erreur_au_format_openai(monte):
@@ -217,7 +225,7 @@ def test_flux_erreur_au_format_openai(monte):
     pilote.erreur = ErreurPilote("Gemini est indisponible")
     r = client.post("/v1/chat/completions", json={"stream": True, "messages": [{"role": "user", "content": "x"}]})
     donnees = [json.loads(l[6:]) for l in r.text.splitlines() if l.startswith("data: {")]
-    assert donnees == [{"error": {"message": "Gemini est indisponible", "type": "upstream_error", "code": 502}}]
+    assert [d for d in donnees if "error" in d] == [{"error": {"message": "Gemini est indisponible", "type": "upstream_error", "code": 502}}]
 
 
 def test_reponse_gardee_meme_si_le_client_abandonne(monte):
@@ -270,3 +278,118 @@ def test_deux_demandes_en_meme_temps_passent_l_une_apres_l_autre(monte):
     for f in fils:
         f.join()
     assert codes == [200, 200] and sorted(e["texte"] for e in pilote.envois) == ["a", "b"]
+
+
+def contenu_du_flux(reponse) -> str:
+    morceaux = [json.loads(l[6:]) for l in reponse.text.splitlines() if l.startswith("data: {")]
+    return "".join(m["choices"][0]["delta"].get("content", "") for m in morceaux if "choices" in m)
+
+
+def test_flux_mot_a_mot(monte):
+    client, *_ = monte()
+    r = client.post("/v1/chat/completions", json={"stream": True, "messages": [{"role": "user", "content": "x"}]})
+    morceaux = [json.loads(l[6:]) for l in r.text.splitlines() if l.startswith("data: {")]
+    textes = [m["choices"][0]["delta"].get("content") for m in morceaux]
+    assert textes[:2] == ["", "Voi"]  # le début arrive pendant que Gemini écrit encore
+    assert morceaux[0]["choices"][0]["delta"]["role"] == "assistant" and morceaux[-1]["choices"][0]["finish_reason"] == "stop"
+    assert contenu_du_flux(r) == "Voilà."
+
+
+def test_flux_avec_image_creee(monte):
+    client, pilote, _ = monte()
+    pilote.reponses = [image()]
+    r = client.post("/v1/chat/completions", json={"stream": True, "media": "image", "messages": [{"role": "user", "content": "un chat"}]})
+    contenu = contenu_du_flux(r)
+    assert contenu.startswith("Voilà.\n\n![Image](http://testserver/v1/media/")
+    morceaux = [json.loads(l[6:]) for l in r.text.splitlines() if l.startswith("data: {")]
+    assert any("images" in m["choices"][0]["delta"] for m in morceaux)
+
+
+def test_chat_avec_photo_jointe(monte):
+    client, pilote, historique = monte()
+    pilote.reponses = [image()]
+    photo = "data:image/png;base64," + base64.b64encode(PNG).decode()
+    r = client.post("/v1/chat/completions", json={"media": "image", "messages": [{"role": "user", "content": [
+        {"type": "text", "text": "Mets le ciel en violet"}, {"type": "image_url", "image_url": {"url": photo}}]}]})
+    assert r.status_code == 200
+    [piece] = pilote.pieces[0]
+    assert (piece.type, piece.mime, piece.donnees) == ("image", "image/png", PNG)
+    assert "Pars des fichiers joints" in pilote.envois[0]["texte"] and "[image jointe]" in pilote.envois[0]["texte"]
+    conversation = historique.lister()[0]
+    assert historique.messages(conversation.id)[0].medias[0]["type"] == "image"  # gardée avec la question
+
+
+def test_chat_avec_pdf_et_son(monte):
+    client, pilote, _ = monte()
+    pdf = base64.b64encode(b"%PDF-1.4").decode()
+    son = base64.b64encode(MP3).decode()
+    client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "Résume et transcris"},
+        {"type": "file", "file": {"filename": "rapport.pdf", "file_data": pdf}},
+        {"type": "input_audio", "input_audio": {"data": son, "format": "mp3"}}]}]})
+    assert [(p.type, p.mime, p.description) for p in pilote.pieces[0]] == [
+        ("fichier", "application/pdf", "rapport.pdf"), ("audio", "audio/mpeg", "audio.mp3")]
+
+
+def test_chat_piece_par_adresse_web(monte):
+    import http.server
+
+    class Serveur(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(PNG)))
+            self.end_headers()
+            self.wfile.write(PNG)
+
+        def log_message(self, *args):
+            pass
+
+    serveur = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Serveur)
+    threading.Thread(target=serveur.serve_forever, daemon=True).start()
+    try:
+        client, pilote, _ = monte()
+        url = f"http://127.0.0.1:{serveur.server_address[1]}/photo.png"
+        client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": [
+            {"type": "text", "text": "Décris"}, {"type": "image_url", "image_url": {"url": url}}]}]})
+        assert [(p.description, p.donnees) for p in pilote.pieces[0]] == [("photo.png", PNG)]
+    finally:
+        serveur.shutdown()
+
+
+def test_piece_illisible_400(monte):
+    client, pilote, _ = monte()
+    r = client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,%%%"}}]}]})
+    assert r.status_code == 400 and "illisible" in r.json()["error"]["message"] and pilote.envois == []
+
+
+def test_images_edits_multipart_comme_le_client_openai(monte):
+    client, pilote, _ = monte()
+    pilote.reponses = [image()]
+    r = client.post("/v1/images/edits", data={"prompt": "Mets le ciel en violet", "n": "1", "response_format": "b64_json"},
+                    files=[("image[]", ("photo.png", PNG, "image/png")), ("mask", ("masque.png", PNG, "image/png"))])
+    assert r.status_code == 200, r.text
+    assert base64.b64decode(r.json()["data"][0]["b64_json"]) == PNG
+    [piece] = pilote.pieces[0]  # le masque n'est pas envoyé
+    assert (piece.description, piece.donnees) == ("photo.png", PNG)
+    assert pilote.envois[0]["outil"] == "image" and "Pars des fichiers joints" in pilote.envois[0]["texte"]
+
+
+def test_images_edits_json_et_erreurs(monte):
+    client, pilote, _ = monte()
+    pilote.reponses = [image()]
+    photo = "data:image/png;base64," + base64.b64encode(PNG).decode()
+    r = client.post("/v1/images/edits", json={"prompt": "en hiver", "images": [photo]})
+    assert r.status_code == 200 and r.json()["data"][0]["url"].startswith("http://testserver/v1/media/")
+    assert client.post("/v1/images/edits", json={"prompt": "x"}).status_code == 400  # sans image
+    assert client.post("/v1/images/edits", json={"images": [photo]}).status_code == 400  # sans consigne
+
+
+def test_media_generations_avec_image_de_depart(monte):
+    client, pilote, _ = monte()
+    pilote.reponses = [(Media("video", "video/mp4", b"\x00\x00\x00\x18ftypisom" + b"\x00" * 8),)]
+    photo = "data:image/png;base64," + base64.b64encode(PNG).decode()
+    r = client.post("/v1/media/generations", json={"type": "video", "prompt": "anime cette photo", "images": [photo]})
+    assert r.status_code == 200 and r.json()["data"][0]["type"] == "video"
+    assert [p.mime for p in pilote.pieces[0]] == ["image/png"]

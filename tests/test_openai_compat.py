@@ -25,7 +25,7 @@ def test_niveau_depuis_effort():
 def test_texte_message():
     assert texte_message("a") == "a"
     assert texte_message([{"type": "text", "text": "a"}, {"type": "image_url"}, {"type": "text", "text": "b"}]) == (
-        "a\n[image jointe, non transmise à Gemini]\nb"
+        "a\n[image jointe]\nb"
     )
     assert texte_message(None) == ""
 

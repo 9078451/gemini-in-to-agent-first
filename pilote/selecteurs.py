@@ -39,6 +39,14 @@ REPERES: dict[str, list[str]] = {
         "button[aria-label*='sélecteur de mode']",
         "button[aria-label*='mode picker']",
     ],
+    # Bouton « + » de la zone de saisie : ouvre le menu d'import de fichiers.
+    "bouton_importer": [
+        "button[aria-label*='importation' i]",
+        "button[aria-label*='Importer' i]",
+        "button[aria-label*='upload' i]",
+        "button[aria-label*='Ajouter des fichiers' i]",
+        "uploader button",
+    ],
     # Menu « Outils » de la zone de saisie : créer des images, des vidéos (Veo), de la musique…
     "bouton_outils": [
         "button[aria-label='Outils']",
@@ -79,3 +87,13 @@ MEDIA_EN_COURS = (
     "[role='progressbar'], mat-progress-spinner, mat-spinner, mat-progress-bar, "
     "[class*='image-loading'], [class*='video-loading'], [class*='generating'], [class*='loading-placeholder']"
 )
+
+# Pièces jointes dans la zone de saisie (aperçus des fichiers joints, hors du texte tapé).
+PIECES_SAISIE = (
+    "uploader-file-preview, file-preview, [data-test-id*='file-preview' i], [class*='file-preview' i], "
+    "[class*='attachment' i], [class*='uploaded' i], img"
+)
+# Un fichier joint encore en cours d'envoi à Google.
+TELEVERSEMENT_EN_COURS = "[role='progressbar'], mat-progress-spinner, mat-spinner, mat-progress-bar, [class*='loading' i]"
+# Entrée du menu d'import qui ouvre le sélecteur de fichiers de l'ordinateur.
+ENTREE_IMPORTER = r"import|upload|fichiers?\b|files?\b"

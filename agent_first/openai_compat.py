@@ -6,6 +6,7 @@ Fonctions pures : tout ce qui touche à Gemini, à l'historique ou au réseau es
 """
 import hashlib
 import json
+import mimetypes
 import re
 import socket
 import time
@@ -16,7 +17,7 @@ EFFORTS = {"none": "Min.", "minimal": "Min.", "low": "Min.", "medium": "Moyen", 
 ROLES_SYSTEME = ("system", "developer")
 # Noms qui désignent « le modèle déjà choisi dans Gemini » (clients qui imposent un nom).
 MODELES_COURANTS = {"", "agent-first", "default", "auto", "gemini"}
-PIECES_JOINTES = {"image_url": "image", "input_image": "image", "input_audio": "audio", "file": "fichier", "input_file": "fichier"}
+PIECES_JOINTES = {"image_url": "image", "input_image": "image", "input_audio": "son", "file": "fichier", "input_file": "fichier"}
 
 
 def niveau_depuis_effort(effort: str | None) -> str | None:
@@ -26,8 +27,7 @@ def niveau_depuis_effort(effort: str | None) -> str | None:
 
 def texte_message(contenu) -> str:
     """Le texte d'un message OpenAI (chaîne, ou liste de morceaux dont on garde le texte).
-    Une pièce jointe (image, son, fichier) ne peut pas être transmise à Gemini : elle est
-    signalée, pour qu'il ne réponde pas comme s'il l'avait vue."""
+    Une pièce jointe (image, son, fichier) y est signalée à sa place : « [image jointe] »."""
     if isinstance(contenu, str):
         return contenu
     if isinstance(contenu, list):
@@ -38,7 +38,7 @@ def texte_message(contenu) -> str:
             if m.get("type") in ("text", "input_text"):
                 morceaux.append(m.get("text", ""))
             elif m.get("type") in PIECES_JOINTES:
-                morceaux.append(f"[{PIECES_JOINTES[m['type']]} jointe, non transmise à Gemini]")
+                morceaux.append(f"[{PIECES_JOINTES[m['type']]} joint{'' if m['type'] in ('input_audio', 'file', 'input_file') else 'e'}]")
         return "\n".join(morceaux)
     return "" if contenu is None else str(contenu)
 
@@ -199,3 +199,48 @@ def choisir_adresse(par_defaut: str | None, toutes: list[str]) -> str:
 
     candidates = [a for a in dict.fromkeys([par_defaut, *toutes]) if a and not a.startswith(("127.", "169.254."))]
     return min(candidates, key=rang) if candidates else "127.0.0.1"
+
+
+def pieces_du_message(contenu) -> list[tuple[str, str | None]]:
+    """Les pièces jointes d'un message OpenAI : (adresse `data:` ou `http(s)`, nom ou None).
+    Formats : `image_url`, `input_image`, `file` / `input_file` (`file_data`, `file_url`),
+    `input_audio`."""
+    if not isinstance(contenu, list):
+        return []
+    pieces = []
+    for m in contenu:
+        if not isinstance(m, dict):
+            continue
+        sorte = m.get("type")
+        if sorte in ("image_url", "input_image"):
+            image = m.get("image_url")
+            url = image.get("url") if isinstance(image, dict) else image
+            if isinstance(url, str) and url:
+                pieces.append((url, None))
+        elif sorte in ("file", "input_file"):
+            fichier = m.get("file") if isinstance(m.get("file"), dict) else m
+            nom, donnees = fichier.get("filename"), fichier.get("file_data")
+            if isinstance(donnees, str) and donnees:
+                if not donnees.startswith("data:"):
+                    mime = mimetypes.guess_type(nom or "")[0] or "application/octet-stream"
+                    donnees = f"data:{mime};base64,{donnees}"
+                pieces.append((donnees, nom))
+            elif isinstance(fichier.get("file_url"), str):
+                pieces.append((fichier["file_url"], nom))
+        elif sorte == "input_audio":
+            audio = m.get("input_audio") or {}
+            if isinstance(audio.get("data"), str):
+                format_ = re.sub(r"[^a-z0-9]", "", str(audio.get("format") or "wav").lower()) or "wav"
+                pieces.append((f"data:audio/{'mpeg' if format_ == 'mp3' else format_};base64,{audio['data']}", f"audio.{format_}"))
+    return pieces
+
+
+def morceau(base: dict, delta: dict, fin: str | None = None) -> str:
+    """Un morceau du flux SSE au format OpenAI."""
+    return f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': delta, 'finish_reason': fin}]}, ensure_ascii=False)}\n\n"
+
+
+def suite_du_texte(envoye: str, texte: str) -> str | None:
+    """Ce qu'il faut ajouter à `envoye` pour arriver à `texte` ; None si `texte` ne le
+    prolonge pas (Gemini a réécrit le début : on attend la suite)."""
+    return texte[len(envoye):] if texte.startswith(envoye) else None

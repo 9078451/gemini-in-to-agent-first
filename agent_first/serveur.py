@@ -1,17 +1,25 @@
 """API HTTP locale d'Agent First (n'écoute que sur 127.0.0.1)."""
+import io
 import json
 import logging
+import queue
+import re
+import threading
+import time
+import zipfile
+from concurrent.futures import CancelledError
 from concurrent.futures import TimeoutError as DelaiFutur
 from dataclasses import asdict
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable, Iterator, Literal
+from urllib.parse import quote
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from agent_first.cache_modes import CacheModes
 from agent_first.cle_api import GardeCle
@@ -22,6 +30,8 @@ from agent_first.file_attente import FileAttente, attendre
 from agent_first.historique import ConversationInconnue, Historique
 from agent_first.mediatheque import Mediatheque, mime_de
 from agent_first.nettoyage import nettoyer_html
+from agent_first.openai_compat import nettoyer_reponse
+from agent_first.pieces_jointes import MAX_PIECES, PieceIllisible, depuis_base64
 from agent_first.reponses import garder_reponse
 from pilote.erreurs import ChoixBloque, ErreurPilote, ModeleIntrouvable, NiveauIntrouvable
 from pilote.modeles import Modes, ResultatGemini
@@ -41,11 +51,18 @@ class NouvelleConversation(BaseModel):
     dossier: str | None = None
 
 
+class PieceJointe(BaseModel):
+    nom: str = Field(min_length=1, max_length=200)
+    mime: str = "application/octet-stream"
+    donnees: str  # base64
+
+
 class NouveauMessage(BaseModel):
     texte: str
     modele: str | None = None
     niveau: str | None = None
     outil: Outil | None = None  # créer une image, une vidéo, de la musique
+    pieces: list[PieceJointe] = Field(default_factory=list, max_length=MAX_PIECES)  # fichiers joints
 
     @field_validator("texte")
     @classmethod
@@ -74,6 +91,10 @@ class Decision(BaseModel):
 
 def erreur(code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=code, content={"erreur": message})
+
+
+def ligne(evenement: dict) -> str:
+    return json.dumps(evenement, ensure_ascii=False) + "\n"
 
 
 def reponse_media(chemin: Path, telecharger: bool = False) -> FileResponse:
@@ -114,6 +135,8 @@ def creer_app(
     app = FastAPI(title="Agent First")
     delais_media = delais_media or {}
     google_connu: list[bool | None] = [None]  # dernier état lu du compte Google
+    en_vol: dict[str, tuple] = {}  # conversation → (futur, arrêt) du message du Chat en cours
+    verrou_vol = threading.Lock()
     if hotes_autorises:
         # Une page web ne doit pas pouvoir joindre l'app par « reliure DNS » (et lire la clé de l'API).
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=hotes_autorises)
@@ -246,21 +269,34 @@ def creer_app(
         return reponse_media(chemin, telecharger)
 
     @app.post("/api/conversations/{identifiant}/messages")
-    def envoyer(identifiant: str, demande: NouveauMessage):
+    def envoyer(identifiant: str, demande: NouveauMessage, direct: bool = False):
+        """`direct` : la réponse arrive en NDJSON pendant que Gemini l'écrit (lignes « texte »,
+        puis « fin », « erreur » ou « arrete »)."""
         outil = demande.outil
         try:
+            pieces = [depuis_base64(p.nom, p.mime, p.donnees) for p in demande.pieces]
+        except PieceIllisible as e:
+            return erreur(422, str(e))
+        try:
             adresse = historique.conversation(identifiant).adresse
+            joints = mediatheque.enregistrer(identifiant, pieces) if mediatheque is not None and pieces else []
             historique.ajouter_message(
                 identifiant, "toi", demande.texte, modele=demande.modele, niveau=demande.niveau,
-                details=json.dumps({"outil": outil}) if outil else None,
+                details=json.dumps({"outil": outil}) if outil else None, medias=joints,
             )
         except ConversationInconnue:
             return erreur(404, INCONNUE)
-        texte, options, limite = demande.texte, {}, delai
+        texte, limite = demande.texte, delai
+        arret, ecrit = threading.Event(), queue.Queue()
+        options = {"arret": arret}
         if outil:  # rédigée pour que Gemini crée le média ; plus de temps qu'une réponse écrite
-            texte = requete_creation(outil, demande.texte, suite=adresse is not None)
-            options = {"outil": outil, "delai": delais_media.get(outil)}
+            texte = requete_creation(outil, demande.texte, suite=adresse is not None, joints=bool(pieces))
+            options |= {"outil": outil, "delai": delais_media.get(outil)}
             limite = (delais_media[outil] + attente_file) if outil in delais_media else delai
+        if pieces:
+            options["pieces"] = tuple(pieces)
+        if direct:
+            options["au_fil"] = lambda brut: ecrit.put(nettoyer_reponse(brut))
 
         def travail(pilote):
             # Gardée dans la file, juste après la réponse : arrivée après le délai, elle est quand
@@ -269,19 +305,109 @@ def creer_app(
             return resultat, enregistrer_reponse(identifiant, resultat)
 
         futur = file_chat.soumettre(travail)
+        with verrou_vol:
+            en_vol[identifiant] = (futur, arret)
+        futur.add_done_callback(lambda _f: liberer(identifiant, futur))
+        if direct:
+            return StreamingResponse(en_direct(identifiant, futur, ecrit, limite), media_type="application/x-ndjson")
         try:
             resultat, message = attendre(futur, limite)
-        except DelaiFutur:
-            return echec(identifiant, 504, f"Pas de réponse de Gemini après {limite:.0f} s.")
-        except (ModeleIntrouvable, NiveauIntrouvable, ChoixBloque) as e:
-            modes.oublier()  # la liste a changé : relue à la prochaine demande
-            return echec(identifiant, 502, str(e))
-        except ErreurPilote as e:
-            return echec(identifiant, 502, str(e))
+        except CancelledError:
+            return {"message": None, "arrete": True}
         except Exception as e:
-            journal.exception("Erreur inattendue pendant l'envoi")
-            return echec(identifiant, 500, f"Erreur inattendue : {e}")
+            return echec(identifiant, *raison_echec(e, limite))
         return {"message": message, "medias_perdus": resultat.medias_perdus}
+
+    def en_direct(identifiant: str, futur, ecrit: queue.Queue, limite: float) -> Iterator[str]:
+        fin, dernier = time.monotonic() + limite, None
+        while True:
+            texte = None
+            while not ecrit.empty():
+                texte = ecrit.get_nowait()
+            if texte is not None and texte != dernier:
+                dernier = texte
+                yield ligne({"type": "texte", "texte": texte})
+            try:
+                resultat, message = futur.result(timeout=0.25)
+                break
+            except DelaiFutur:
+                if time.monotonic() < fin:
+                    continue
+                futur.cancel()
+                code, texte_erreur = raison_echec(DelaiFutur(), limite)
+            except CancelledError:
+                yield ligne({"type": "arrete"})
+                return
+            except Exception as e:
+                code, texte_erreur = raison_echec(e, limite)
+            noter_erreur(identifiant, texte_erreur)
+            yield ligne({"type": "erreur", "code": code, "erreur": texte_erreur})
+            return
+        yield ligne({"type": "fin", "message": message, "medias_perdus": resultat.medias_perdus})
+
+    def liberer(identifiant: str, futur) -> None:
+        with verrou_vol:
+            if en_vol.get(identifiant, (None,))[0] is futur:
+                del en_vol[identifiant]
+
+    @app.post("/api/conversations/{identifiant}/arreter")
+    def arreter_message(identifiant: str):
+        """Arrête le message du Chat en cours : retiré de la file s'il attend son tour, sinon
+        Gemini est interrompu et ce qu'il avait écrit est gardé."""
+        with verrou_vol:
+            vol = en_vol.get(identifiant)
+        if vol is None:
+            return erreur(409, "Aucune réponse en cours dans cette conversation.")
+        futur, arret = vol
+        if not futur.cancel():
+            arret.set()
+        return {"ok": True}
+
+    def raison_echec(e: BaseException, limite: float) -> tuple[int, str]:
+        if isinstance(e, DelaiFutur):
+            return 504, f"Pas de réponse de Gemini après {limite:.0f} s."
+        if isinstance(e, (ModeleIntrouvable, NiveauIntrouvable, ChoixBloque)):
+            modes.oublier()  # la liste a changé : relue à la prochaine demande
+            return 502, str(e)
+        if isinstance(e, ErreurPilote):
+            return 502, str(e)
+        journal.error("Erreur inattendue pendant l'envoi", exc_info=e)
+        return 500, f"Erreur inattendue : {e}"
+
+    @app.get("/api/medias")
+    def galerie(limite: int = 60, type: str | None = None):
+        """Les derniers médias créés par Gemini, toutes conversations confondues."""
+        return historique.medias_recents(max(1, min(limite, 500)), type)
+
+    @app.get("/api/conversations/{identifiant}/export")
+    def exporter(identifiant: str):
+        """La conversation en Markdown, avec ses médias, dans un .zip."""
+        try:
+            conversation = historique.conversation(identifiant)
+            messages = historique.messages(identifiant)
+        except ConversationInconnue:
+            return erreur(404, INCONNUE)
+        tampon = io.BytesIO()
+        with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as archive:
+            lignes = [f"# {conversation.titre or 'Conversation'}", "", f"_Exportée d'agent.first — {conversation.cree_le}_", ""]
+            for m in messages:
+                if m.role == "cowork":
+                    continue
+                qui = {"toi": "Toi", "gemini": f"Gemini{f' ({m.modele})' if m.modele else ''}", "erreur": "Erreur"}.get(m.role, m.role)
+                lignes += [f"### {qui} · {m.cree_le}", "", m.texte, ""]
+                for media in m.medias:
+                    chemin = mediatheque.chemin(media["id"]) if mediatheque else None
+                    if chemin is None:
+                        continue
+                    archive.write(chemin, f"medias/{chemin.name}")
+                    nom = media.get("description") or chemin.name
+                    lignes += [f"![{nom}](medias/{chemin.name})" if media["type"] == "image" else f"[{nom}](medias/{chemin.name})", ""]
+            archive.writestr("conversation.md", "\n".join(lignes))
+        nom = re.sub(r"[^\w\- ]", "", conversation.titre or "conversation").strip()[:60] or "conversation"
+        return Response(
+            tampon.getvalue(), media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename=\"agent-first.zip\"; filename*=UTF-8''{quote(nom)}.zip"},
+        )
 
     @app.get("/api/statistiques")
     def statistiques(periode: Periode = "7j"):
@@ -299,11 +425,14 @@ def creer_app(
         return asdict(message)
 
     def echec(identifiant: str, code: int, message: str) -> JSONResponse:
+        noter_erreur(identifiant, message)
+        return erreur(code, message)
+
+    def noter_erreur(identifiant: str, message: str) -> None:
         try:
             historique.ajouter_message(identifiant, "erreur", message)
         except ConversationInconnue:
             pass
-        return erreur(code, message)
 
     @app.middleware("http")
     async def sans_cache(requete, suite):

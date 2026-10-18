@@ -2,6 +2,7 @@
 
 Partagé par le Chat de l'app et l'API réseau.
 """
+import json
 import logging
 
 from agent_first.historique import ConversationInconnue, Historique, Message
@@ -19,8 +20,11 @@ def garder_reponse(
     resultat: ResultatGemini,
     html: str | None = None,
 ) -> tuple[Message | None, list[dict]]:
-    """Le message enregistré (None si la conversation a été retirée pendant l'envoi) et
-    la description des médias."""
+    """Le message enregistré (None si la conversation a été retirée pendant l'envoi, ou si
+    la réponse a été arrêtée avant que Gemini écrive quoi que ce soit) et la description
+    des médias."""
+    if resultat.interrompue and not resultat.reponse.strip() and not resultat.medias:
+        return None, []
     decrits = []
     if mediatheque is not None and resultat.medias:
         try:
@@ -32,6 +36,7 @@ def garder_reponse(
         message = historique.ajouter_message(
             conversation_id, "gemini", nettoyer_reponse(resultat.reponse), html=html,
             modele=resultat.modele, niveau=resultat.niveau, duree=resultat.duree, medias=decrits,
+            details=json.dumps({"interrompue": True}) if resultat.interrompue else None,
         )
     except ConversationInconnue:
         journal.info("Conversation %s retirée pendant l'envoi : réponse non enregistrée", conversation_id)

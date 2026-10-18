@@ -86,6 +86,15 @@ class LimiteGemini(ErreurPilote):
         )
 
 
+class PieceRefusee(ErreurPilote):
+    def __init__(self, nom: str) -> None:
+        self.nom = nom
+        super().__init__(
+            f"Gemini n'a pas accepté la pièce jointe « {nom} » (collée, déposée puis choisie avec « + »). "
+            "Vérifie qu'il accepte ce type de fichier, ou joins-le toi-même dans la fenêtre Chrome dédiée."
+        )
+
+
 class PageInstable(ErreurPilote):
     """La page de Gemini a changé sous le pilote (onglet fermé ou rechargé, Chrome relancé)."""
 

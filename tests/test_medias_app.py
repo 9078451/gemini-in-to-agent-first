@@ -19,12 +19,22 @@ MP4 = b"\x00\x00\x00\x18ftypisom" + b"\x00" * 32
 class PiloteMedias:
     def __init__(self) -> None:
         self.envois: list[dict] = []
+        self.pieces: list[tuple] = []
         self.medias: tuple[Media, ...] = (Media("image", "image/png", PNG, "un chat roux"),)
         self.duree = 0.0
 
-    def envoyer(self, adresse, texte, modele=None, niveau=None, delai=None, outil=None):
+    def envoyer(self, adresse, texte, modele=None, niveau=None, delai=None, outil=None, pieces=(), au_fil=None,
+                arret=None):
         self.envois.append({"adresse": adresse, "texte": texte, "delai": delai, "outil": outil})
-        time.sleep(self.duree)
+        self.pieces.append(pieces)
+        for morceau in ("Gemini a dit\nVoici", "Gemini a dit\nVoici ton", "Gemini a dit\nVoici ton image."):
+            if au_fil is not None:
+                au_fil(morceau)
+        fin = time.monotonic() + self.duree
+        while time.monotonic() < fin:
+            if arret is not None and arret.is_set():  # comme le pilote : « Interrompre » cliqué
+                return ResultatGemini(reponse="Voici ton", adresse="https://gemini.google.com/app/1", interrompue=True)
+            time.sleep(0.02)
         return ResultatGemini(
             reponse="Gemini a dit\nVoici ton image.", adresse="https://gemini.google.com/app/1",
             modele=modele, niveau=niveau, duree=3.0, medias=self.medias if outil else (),
@@ -183,3 +193,120 @@ def test_reponse_tardive_gardee_dans_l_historique(monte):
     time.sleep(0.6)
     roles = [m["role"] for m in client.get(f"/api/conversations/{conversation}").json()["messages"]]
     assert roles == ["toi", "erreur", "gemini"]
+
+
+def lignes_ndjson(reponse):
+    import json
+
+    return [json.loads(l) for l in reponse.text.splitlines() if l.strip()]
+
+
+def test_photo_jointe_envoyee_a_gemini_et_gardee(monte):
+    import base64
+
+    client, pilote = monte()
+    conversation = client.post("/api/conversations", json={}).json()["id"]
+    piece = {"nom": "vacances.png", "mime": "image/png", "donnees": base64.b64encode(PNG).decode()}
+    r = client.post(f"/api/conversations/{conversation}/messages",
+                    json={"texte": "Mets le ciel en violet", "outil": "image", "pieces": [piece]})
+    assert r.status_code == 200
+    [envoyee] = pilote.pieces[0]
+    assert (envoyee.type, envoyee.mime, envoyee.donnees, envoyee.description) == ("image", "image/png", PNG, "vacances.png")
+    question = client.get(f"/api/conversations/{conversation}").json()["messages"][0]
+    assert question["medias"][0]["description"] == "vacances.png"
+    assert client.get(f"/api/medias/{question['medias'][0]['id']}").content == PNG
+
+
+def test_piece_jointe_illisible_422(monte):
+    client, _ = monte()
+    conversation = client.post("/api/conversations", json={}).json()["id"]
+    r = client.post(f"/api/conversations/{conversation}/messages",
+                    json={"texte": "x", "pieces": [{"nom": "a.png", "mime": "image/png", "donnees": "pas du base64 !"}]})
+    assert r.status_code == 422 and "illisible" in r.json()["erreur"]
+
+
+def test_pdf_joint_garde_son_extension(monte):
+    import base64
+
+    client, _ = monte()
+    conversation = client.post("/api/conversations", json={}).json()["id"]
+    piece = {"nom": "rapport.pdf", "mime": "application/pdf", "donnees": base64.b64encode(b"%PDF-1.4").decode()}
+    client.post(f"/api/conversations/{conversation}/messages", json={"texte": "Résume", "pieces": [piece]})
+    media = client.get(f"/api/conversations/{conversation}").json()["messages"][0]["medias"][0]
+    assert media["type"] == "fichier" and media["id"].endswith(".pdf")
+    assert client.get(f"/api/medias/{media['id']}").headers["content-type"] == "application/pdf"
+
+
+def test_reponse_en_direct(monte):
+    client, _ = monte()
+    conversation = client.post("/api/conversations", json={}).json()["id"]
+    r = client.post(f"/api/conversations/{conversation}/messages", params={"direct": True}, json={"texte": "Bonjour"})
+    lignes = lignes_ndjson(r)
+    assert [l["texte"] for l in lignes if l["type"] == "texte"][-1] == "Voici ton image."  # sans « Gemini a dit »
+    assert lignes[-1]["type"] == "fin" and lignes[-1]["message"]["texte"] == "Voici ton image."
+
+
+def test_reponse_en_direct_erreur(monte):
+    client, pilote = monte()
+    pilote.envoyer = lambda *a, **k: (_ for _ in ()).throw(__import__("pilote.erreurs").erreurs.PasConnecteGoogle())
+    conversation = client.post("/api/conversations", json={}).json()["id"]
+    lignes = lignes_ndjson(client.post(f"/api/conversations/{conversation}/messages", params={"direct": True}, json={"texte": "x"}))
+    assert lignes[-1]["type"] == "erreur" and lignes[-1]["code"] == 502
+
+
+def test_arreter_garde_le_debut_de_la_reponse(monte):
+    client, pilote = monte()
+    pilote.duree = 2.0
+    conversation = client.post("/api/conversations", json={}).json()["id"]
+    reponses = {}
+    envoi = threading.Thread(target=lambda: reponses.setdefault("r", client.post(
+        f"/api/conversations/{conversation}/messages", json={"texte": "Raconte"})))
+    envoi.start()
+    time.sleep(0.2)
+    assert client.post(f"/api/conversations/{conversation}/arreter").json() == {"ok": True}
+    envoi.join()
+    message = reponses["r"].json()["message"]
+    assert message["texte"] == "Voici ton" and message["details"] == '{"interrompue": true}'
+    assert client.post(f"/api/conversations/{conversation}/arreter").status_code == 409  # plus rien en cours
+
+
+def test_arreter_un_message_qui_attend_son_tour(monte):
+    client, pilote = monte()
+    pilote.duree = 0.6
+    a = client.post("/api/conversations", json={}).json()["id"]
+    b = client.post("/api/conversations", json={}).json()["id"]
+    reponses = {}
+    fils = [threading.Thread(target=lambda c=c: reponses.setdefault(c, client.post(f"/api/conversations/{c}/messages", json={"texte": c})))
+            for c in (a, b)]
+    fils[0].start()
+    time.sleep(0.1)
+    fils[1].start()
+    time.sleep(0.1)
+    client.post(f"/api/conversations/{b}/arreter")
+    for f in fils:
+        f.join()
+    assert reponses[b].json() == {"message": None, "arrete": True}
+    assert [e["texte"] for e in pilote.envois] == [a]  # le second n'est jamais parti vers Gemini
+
+
+def test_galerie_des_medias(monte):
+    client, _ = monte()
+    a, _ = creer_image(client, "un chat")
+    b, _ = creer_image(client, "un chien")
+    galerie = client.get("/api/medias").json()
+    assert [m["conversation_id"] for m in galerie] == [b, a] and galerie[0]["titre"] == "un chien"
+    assert client.get("/api/medias", params={"type": "video"}).json() == []
+
+
+def test_export_zip_avec_medias(monte):
+    import io
+    import zipfile
+
+    client, _ = monte()
+    conversation, _ = creer_image(client, "un chat roux")
+    r = client.get(f"/api/conversations/{conversation}/export")
+    assert r.headers["content-type"] == "application/zip"
+    archive = zipfile.ZipFile(io.BytesIO(r.content))
+    texte = archive.read("conversation.md").decode()
+    assert texte.startswith("# un chat roux") and "Voici ton image." in texte and "![un chat roux](medias/" in texte
+    assert [n for n in archive.namelist() if n.startswith("medias/")] and archive.read(archive.namelist()[0]) == PNG

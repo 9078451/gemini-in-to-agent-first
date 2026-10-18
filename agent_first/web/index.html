@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>agent.first</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23d97757'/%3E%3Cpath d='M12 5l1.9 5 5 1.9-5 1.9-1.9 5-1.9-5-5-1.9 5-1.9z' fill='%231f1e1d'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/app.css">
   <script type="module" src="/static/app.js"></script>
 </head>
@@ -38,6 +39,7 @@
     <symbol id="i-musique" viewBox="0 0 24 24"><path d="M9 17.5V6l10-2v11.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/></symbol>
     <symbol id="i-telecharger" viewBox="0 0 24 24"><path d="M12 4.5v11M7 11l5 5 5-5M5 19.5h14"/></symbol>
     <symbol id="i-ouvrir" viewBox="0 0 24 24"><path d="M14 4.5h5.5V10M19.5 4.5l-8 8M17 14v4a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18V8.5A1.5 1.5 0 0 1 6 7h4"/></symbol>
+    <symbol id="i-trombone" viewBox="0 0 24 24"><path d="M20 11.5l-7.6 7.6a5 5 0 0 1-7.1-7.1l8-8a3.3 3.3 0 0 1 4.7 4.7l-8 8a1.7 1.7 0 0 1-2.4-2.4l7.3-7.3"/></symbol>
     <symbol id="i-reessayer" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4"/></symbol>
   </svg>
 
@@ -72,6 +74,18 @@
         <p>Tes conversations avec Gemini, en Chat et en Cowork.</p>
       </header>
       <div class="cartes" id="cartes"></div>
+      <section class="panneau" id="panneau-medias" hidden>
+        <div class="panneau-entete">
+          <h2>Médias créés</h2>
+          <div class="segments" id="filtre-medias">
+            <button type="button" data-type="" class="actif">Tout</button>
+            <button type="button" data-type="image">Images</button>
+            <button type="button" data-type="video">Vidéos</button>
+            <button type="button" data-type="audio">Sons</button>
+          </div>
+        </div>
+        <div class="galerie" id="galerie"></div>
+      </section>
       <section class="panneau" id="panneau-historique">
         <div class="panneau-entete">
           <h2>Historique</h2>
@@ -96,6 +110,7 @@
           <svg><use href="#i-dossier"/></svg><span id="nom-dossier">Choisir un dossier</span>
         </button>
         <div class="processus" id="processus" aria-label="Processus lancés par Cowork" hidden></div>
+        <button class="icone" id="exporter" type="button" title="Exporter la conversation (.zip : texte et médias)" aria-label="Exporter la conversation" hidden><svg><use href="#i-telecharger"/></svg></button>
         <div class="segments" id="modes" role="radiogroup" aria-label="Mode">
           <button type="button" data-mode="chat" class="actif">Chat</button>
           <button type="button" data-mode="cowork">Cowork</button>
@@ -104,8 +119,11 @@
       <div class="fil" id="fil"></div>
       <div class="composeur">
         <form class="saisie" id="form-saisie">
+          <div class="pieces" id="pieces" aria-label="Fichiers joints" hidden></div>
           <textarea id="saisie" rows="1" placeholder="Demande à Gemini…" aria-label="Ton message"></textarea>
+          <input type="file" id="fichiers" multiple hidden>
           <div class="saisie-bas">
+            <button class="reglage" id="joindre" type="button" title="Joindre des fichiers (photos, PDF, sons…) — ou colle-les, ou glisse-les ici" aria-label="Joindre des fichiers"><svg><use href="#i-trombone"/></svg></button>
             <div class="menu-reglage" id="zone-outil">
               <button class="reglage" id="bouton-outil" type="button" aria-haspopup="listbox" aria-expanded="false" title="Créer une image, une vidéo ou de la musique">
                 <svg id="icone-outil"><use href="#i-texte"/></svg><span id="nom-outil">Texte</span><svg><use href="#i-chevron"/></svg>
@@ -124,7 +142,7 @@
               </button>
               <div class="menu" id="menu-niveaux" role="listbox" aria-label="Niveau de réflexion" hidden></div>
             </div>
-            <button class="arreter" id="arreter" type="button" title="Arrêter la tâche après l'étape en cours" hidden><svg><use href="#i-stop"/></svg>Arrêter</button>
+            <button class="arreter" id="arreter" type="button" title="Arrêter" hidden><svg><use href="#i-stop"/></svg>Arrêter</button>
             <button class="envoyer" id="envoyer" type="submit" aria-label="Envoyer"><svg><use href="#i-fleche-haut"/></svg></button>
           </div>
         </form>

@@ -15,6 +15,7 @@ CONSIGNES = {
                "l'audio lui-même (pas seulement des paroles, pas une partition).",
 }
 SUITE = "Si la demande porte sur un média précédent de cette conversation, modifie-le au lieu d'en créer un sans rapport."
+JOINTS = "Pars des fichiers joints à ce message : modifie-les, ou inspire-t'en, selon la demande."
 FORMATS = {"carre": "format carré (1:1)", "paysage": "format paysage (16:9)", "portrait": "format portrait (9:16)"}
 VARIANTE = {
     "image": "Génère une autre version de cette image, différente des précédentes, pour la même demande.",
@@ -30,13 +31,18 @@ ALIAS = {
 TYPE_MEDIA = {"image": "image", "video": "video", "musique": "audio"}  # type du média attendu
 
 
-def requete_creation(outil: str, demande: str, format: str | None = None, suite: bool = False) -> str:
+def requete_creation(
+    outil: str, demande: str, format: str | None = None, suite: bool = False, joints: bool = False,
+) -> str:
     """Le message envoyé à Gemini pour créer un média. `suite` : la conversation Gemini
-    existe déjà (la demande peut viser un média précédent)."""
+    existe déjà (la demande peut viser un média précédent) ; `joints` : des fichiers
+    (une photo à retoucher…) sont joints au message."""
     consigne = CONSIGNES[outil]
     if format in FORMATS:
         consigne += f" Format : {FORMATS[format]}."
-    if suite:
+    if joints:
+        consigne += " " + JOINTS
+    elif suite:
         consigne += " " + SUITE
     return f"{consigne}\n\nDemande : {demande.strip()}"
 

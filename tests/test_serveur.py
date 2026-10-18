@@ -20,7 +20,7 @@ class FauxPilote:
         self.duree = 0.0
         self.listes = 0
 
-    def envoyer(self, adresse, texte, modele=None, niveau=None):
+    def envoyer(self, adresse, texte, modele=None, niveau=None, **_options):
         self.recus.append((adresse, texte, modele, niveau))
         time.sleep(self.duree)
         if self.erreur:

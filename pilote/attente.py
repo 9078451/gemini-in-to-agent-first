@@ -5,6 +5,14 @@ from typing import Callable
 from pilote.erreurs import DelaiDepasse, ErreurPilote, LimiteGemini, MessageAbandonne, MessageNonEnvoye
 
 
+class Interrompue(Exception):
+    """L'utilisateur a demandé l'arrêt de la réponse : `partiel` est ce que Gemini avait écrit."""
+
+    def __init__(self, partiel: str = "") -> None:
+        super().__init__("réponse interrompue")
+        self.partiel = partiel
+
+
 def erreur_envoi(bandeau_limite: str | None) -> ErreurPilote:
     """L'erreur à montrer quand Gemini n'a pas pris le message : la limite
     d'utilisation du compte si Gemini l'affiche, sinon une cause inconnue."""
@@ -42,14 +50,18 @@ def attendre_nouvelle_reponse(
     intervalle: float = 0.3,
     horloge: Callable[[], float] = time.monotonic,
     dormir: Callable[[float], None] = time.sleep,
+    doit_arreter: Callable[[], bool] = lambda: False,
 ) -> bool:
     """True dès qu'une nouvelle réponse apparaît ; False après `delai` sans réponse ni
     génération. DelaiDepasse si Gemini génère encore au bout du délai. MessageAbandonne si
     la question a disparu et que plus rien ne se génère depuis `patience_abandon` secondes :
-    Gemini a lâché le message, inutile d'attendre la fin du délai (jusqu'à 10 min)."""
+    Gemini a lâché le message, inutile d'attendre la fin du délai (jusqu'à 10 min).
+    Interrompue dès que `doit_arreter()`."""
     fin = horloge() + delai
     disparue_depuis = None
     while horloge() < fin:
+        if doit_arreter():
+            raise Interrompue()
         if compter_reponses() > nb_reponses_avant:
             return True
         if compter_questions() < nb_questions_attendu and not generation_en_cours():
@@ -77,6 +89,8 @@ def attendre_fin_reponse(
     lire_medias: Callable[[], tuple[int, bool]] = lambda: (0, False),
     media_attendu: bool = False,
     patience_medias: float = 20.0,
+    au_fil: Callable[[str], None] | None = None,
+    doit_arreter: Callable[[], bool] = lambda: False,
 ) -> str:
     """Renvoie le texte quand la génération est finie et que la réponse (texte et médias) n'a
     plus bougé pendant `stabilite` secondes — ou seulement `stabilite_apres_generation` si on
@@ -87,7 +101,10 @@ def attendre_fin_reponse(
     reste un en préparation. Une réponse faite d'une seule image (sans texte) est finie. Un
     média en préparation, ou attendu (`media_attendu`) mais pas encore là, fait patienter
     jusqu'à `patience_medias` secondes de plus : une vidéo arrive bien après le texte
-    « Je crée ta vidéo… »."""
+    « Je crée ta vidéo… ».
+
+    `au_fil(texte)` reçoit le texte chaque fois qu'il change (réponse en direct) ;
+    `doit_arreter()` interrompt l'attente (Interrompue, avec le texte déjà écrit)."""
     debut = horloge()
     dernier_texte = lire_texte()
     dernier_nombre = lire_medias()[0]
@@ -99,11 +116,15 @@ def attendre_fin_reponse(
         if maintenant - debut > delai_max:
             raise DelaiDepasse(delai_max, dernier_texte.strip())
         texte = lire_texte()
+        if doit_arreter():
+            raise Interrompue(texte)
         nombre, en_preparation = lire_medias()
         en_cours = generation_en_cours()
         vu_generer = vu_generer or en_cours
         attente = stabilite_apres_generation if vu_generer else stabilite
         if texte != dernier_texte or nombre != dernier_nombre:
+            if au_fil is not None and texte != dernier_texte:
+                au_fil(texte)
             dernier_texte, dernier_nombre = texte, nombre
             dernier_changement, calme_depuis = maintenant, None
         elif (texte.strip() or nombre) and not en_cours and maintenant - dernier_changement >= attente:

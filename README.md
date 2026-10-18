@@ -34,6 +34,15 @@ relance avec les bons réglages.
 - **Créer** (sous la zone de saisie) : Texte, **Image**, **Vidéo** ou **Musique**
   (voir plus bas). Une erreur propose **Réessayer** ; chaque bloc de code a son
   bouton Copier.
+- **Joindre des fichiers** (photos, PDF, sons, vidéos…, 10 au plus, 50 Mo chacun) :
+  trombone, Ctrl+V d'une capture d'écran, ou glisser-déposer sur la discussion.
+  Avec **Créer → Image**, une photo jointe est retouchée (« mets le ciel en
+  violet »).
+- La réponse **s'écrit en direct** ; **Arrêter** l'interrompt dans Gemini et garde
+  ce qu'il avait déjà écrit (marqué « arrêtée »).
+- **Exporter** (en-tête de la discussion) : un `.zip` avec la conversation en
+  Markdown et tous ses médias. Le **tableau de bord** montre les derniers médias
+  créés (filtres Images, Vidéos, Sons).
 - **Accueil / Historique** : statistiques, recherche, reprise ou retrait d'une
   conversation (elle reste dans Gemini).
 - **Paramètres** : modèle et niveau par défaut, état de Chrome et de Google,
@@ -133,13 +142,17 @@ pendant une tâche Cowork, mais un à la fois (les suivants attendent leur tour)
   « agent-first » garde le modèle déjà choisi dans Gemini.
 - `reasoning_effort` : `none`/`minimal`/`low` → Min., `medium` → Moyen,
   `high`/`xhigh` → Max.
-- `stream: true` : un commentaire `: ping` part toutes les 10 s pendant que
-  Gemini réfléchit (les clients n'abandonnent plus), puis la réponse ; une
-  erreur arrive au format OpenAI (`data: {"error": …}`).
+- `stream: true` : un commentaire `: ping` part toutes les 10 s de silence (les
+  clients n'abandonnent plus pendant que Gemini réfléchit) ; une erreur arrive
+  au format OpenAI (`data: {"error": …}`).
 - Une demande qui n'a pas pu commencer à temps est retirée de la file : elle ne
   part pas vers Gemini plus tard. Une réponse arrivée après le délai est quand
   même gardée dans l'historique.
-- Une image jointe à un message n'est pas transmise à Gemini (il en est averti).
+- **Fichiers joints** : les morceaux `image_url` (adresse `data:` ou `http(s)`),
+  `input_image`, `file` / `input_file` (`file_data`, `file_url`) et `input_audio`
+  sont envoyés à Gemini avec le message (10 au plus, 50 Mo chacun).
+- `stream: true` envoie le texte **au fil de l'écriture** de Gemini, morceau par
+  morceau ; les médias arrivent dans le dernier morceau.
 
 **Images** (format OpenAI) :
 
@@ -147,6 +160,9 @@ pendant une tâche Cowork, mais un à la fois (les suivants attendent leur tour)
 reponse = client.images.generate(prompt="un renard roux dans la neige", size="1792x1024")
 print(reponse.data[0].url)          # lien signé : s'ouvre sans la clé (navigateur, <img>)
 # response_format="b64_json" donne l'image elle-même ; n=2 demande deux versions
+
+retouche = client.images.edit(image=open("photo.jpg", "rb"), prompt="mets le ciel en violet")
+# Gemini ne prend pas de masque : décris la zone à changer dans le prompt
 ```
 
 Dans `/v1/chat/completions`, `"modalities": ["image", "text"]` (comme OpenRouter)
@@ -165,7 +181,8 @@ curl -H "Authorization: Bearer <clé>" -H "Content-Type: application/json" ^
 | Route | Rôle |
 |---|---|
 | `POST /v1/images/generations` `{prompt, n?, size?, response_format?, model?}` | image(s), format OpenAI |
-| `POST /v1/media/generations` `{type, prompt, n?, size?, response_format?, model?, wait?}` | image, vidéo ou musique ; `wait: false` → 202 tout de suite |
+| `POST /v1/images/edits` (multipart `image`/`image[]`, `prompt`… ou JSON `{images, prompt}`) | retouche de photo(s), format OpenAI |
+| `POST /v1/media/generations` `{type, prompt, images?, n?, size?, response_format?, model?, wait?}` | image, vidéo ou musique, à partir d'images si `images` ; `wait: false` → 202 tout de suite |
 | `GET /v1/media/generations/{id}` | état (`in_progress`, `completed`, `failed`) et médias |
 | `GET /v1/media/{conversation}/{fichier}` | le fichier (`?sig=` d'un lien signé, ou la clé ; `?download=true`) |
 | `GET /v1/conversations/{id}` | une conversation de l'historique et ses médias |
@@ -208,11 +225,13 @@ node --test tests/web/outils.test.mjs tests/web/outils_cowork.test.mjs  tests Ja
 .venv\Scripts\python -m pilote.modes                                    modèles et niveaux de Gemini
 .venv\Scripts\python -m pilote.essai "Bonjour"                          essai direct du pilote
 .venv\Scripts\python -m pilote.essai "Un chat roux" --outil image       essai d'une création (médias dans journaux\)
+.venv\Scripts\python -m pilote.essai "Décris" --joindre photo.jpg        essai d'une pièce jointe
 .venv\Scripts\python -m pilote.inspecter                                repères de la page Gemini
 .venv\Scripts\python -m pilote.inspecter --medias                       médias de la dernière réponse
 ```
 
 `tests/test_pilote_page.py` lance le pilote face à une fausse page Gemini, dans
-le Chrome de `CHEMIN_CHROME` (sans fenêtre) ; il est passé si aucun Chrome ne démarre.
+le Chrome de `CHEMIN_CHROME` (sans fenêtre) : médias, fichiers joints, réponse en
+direct puis arrêtée. Il est passé si aucun Chrome ne démarre.
 
 Conception : `docs/superpowers/specs/` · Plans : `docs/superpowers/plans/`

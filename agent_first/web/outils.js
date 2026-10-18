@@ -129,3 +129,29 @@ export function tailleFichier(octets) {
   }
   return `${valeur.toLocaleString("fr-FR", { maximumFractionDigits: valeur < 10 ? 1 : 0 })} ${unites[i]}`;
 }
+
+export const MAX_PIECES = 10;
+export const MAX_OCTETS_PIECE = 50 * 1024 * 1024;
+
+// Les fichiers qu'on peut encore joindre (au plus MAX_PIECES, MAX_OCTETS_PIECE chacun) et
+// la raison de ceux qui sont refusés.
+export function trierPieces(dejaJointes, nouvelles) {
+  const acceptees = [];
+  const refus = [];
+  for (const f of nouvelles) {
+    if (f.size > MAX_OCTETS_PIECE) refus.push(`${f.name} : plus de ${MAX_OCTETS_PIECE / 1024 / 1024} Mo`);
+    else if (dejaJointes + acceptees.length >= MAX_PIECES) refus.push(`${f.name} : ${MAX_PIECES} fichiers au plus`);
+    else if (!f.size) refus.push(`${f.name} : fichier vide`);
+    else acceptees.push(f);
+  }
+  return { acceptees, refus };
+}
+
+// Le message de Gemini a été arrêté par l'utilisateur.
+export function estInterrompue(message) {
+  try {
+    return Boolean(JSON.parse(message.details ?? "null")?.interrompue);
+  } catch {
+    return false;
+  }
+}

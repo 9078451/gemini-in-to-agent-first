@@ -92,3 +92,15 @@ test("création de médias : attente, outil du message, avertissement, taille", 
   assert.equal(tailleFichier(1536), "1,5 Ko");
   assert.equal(tailleFichier(25 * 1024 * 1024), "25 Mo");
 });
+
+test("pièces jointes : limites et refus expliqués", async () => {
+  const { trierPieces, MAX_OCTETS_PIECE, estInterrompue } = await import("../../agent_first/web/outils.js");
+  const f = (name, size) => ({ name, size });
+  const { acceptees, refus } = trierPieces(9, [f("a.png", 10), f("b.png", 10), f("gros.mp4", MAX_OCTETS_PIECE + 1), f("vide.txt", 0)]);
+  assert.deepEqual(acceptees.map((x) => x.name), ["a.png"]);
+  assert.equal(refus.length, 3);
+  assert.match(refus[0], /^b\.png : 10 fichiers au plus/);
+  assert.match(refus[1], /^gros\.mp4 : plus de 50 Mo/);
+  assert.equal(estInterrompue({ details: '{"interrompue": true}' }), true);
+  assert.equal(estInterrompue({ details: null }), false);
+});

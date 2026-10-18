@@ -240,6 +240,24 @@ class Historique:
             ).fetchone()
         return json.loads(ligne["details"]) if ligne and ligne["details"] else None
 
+    def medias_recents(self, limite: int = 60, type_media: str | None = None) -> list[dict]:
+        """Les derniers médias créés par Gemini (le plus récent d'abord), avec leur conversation."""
+        trouves: list[dict] = []
+        with self._verrou:
+            lignes = self._base.execute(
+                """SELECT m.medias, m.conversation_id, m.cree_le, c.titre FROM messages m
+                   JOIN conversations c ON c.id = m.conversation_id
+                   WHERE m.role = 'gemini' AND m.medias IS NOT NULL ORDER BY m.id DESC""",
+            )
+            for ligne in lignes:
+                for media in reversed(json.loads(ligne["medias"])):
+                    if type_media is None or media.get("type") == type_media:
+                        trouves.append({**media, "conversation_id": ligne["conversation_id"],
+                                        "titre": ligne["titre"], "cree_le": ligne["cree_le"]})
+                if len(trouves) >= limite:
+                    break
+        return trouves[:limite]
+
     # ---- statistiques ---------------------------------------------------
 
     def statistiques(self, periode: str = "7j") -> dict:

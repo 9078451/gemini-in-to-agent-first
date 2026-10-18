@@ -1,5 +1,6 @@
 """Le pilote face à une fausse page Gemini, dans un vrai Chromium : médias repérés,
-attendus et téléchargés (avec les cookies de la page, depuis un blob, en taille réelle).
+attendus et téléchargés (avec les cookies de la page, depuis un blob, en taille réelle),
+fichiers joints (collés, ou choisis avec « + »), réponse lue en direct, puis arrêtée.
 
 Lancé avec le Chromium de Playwright, sinon celui de AGENT_FIRST_CHROMIUM, sinon le Chrome
 de `config` ; passé si aucun ne démarre.
@@ -18,7 +19,12 @@ from pilote.medias import deviner_mime, variantes
 PAGE = """<!doctype html><meta charset="utf-8"><title>Faux Gemini</title>
 <body>
 <div id="fil"></div>
+<div class="saisie">
+<div id="pieces"></div>
 <rich-textarea><div class="ql-editor" contenteditable="true"></div></rich-textarea>
+<button aria-label="Ouvrir le menu d'importation de fichiers" id="plus">+</button>
+<div role="menu" id="menu-import" hidden><button role="menuitem" id="importer">Importer des fichiers</button></div>
+<input type="file" id="fichier" hidden multiple>
 <button aria-label="Outils" id="outils">Outils</button>
 <div role="menu" id="menu" hidden>
   <button role="menuitemcheckbox" aria-checked="false">Deep Research</button>
@@ -26,8 +32,35 @@ PAGE = """<!doctype html><meta charset="utf-8"><title>Faux Gemini</title>
   <button role="menuitemcheckbox" aria-checked="false" data-outil="image">Créer des images</button>
 </div>
 <button aria-label="Envoyer un message" id="envoyer">Envoyer</button>
+</div>
 <button aria-label="Interrompre la réponse" id="stop" hidden>Stop</button>
 <script>
+window.recus = [];  // fichiers joints au message envoyé
+window.collageIgnore = false;  // comme une page qui ne prend pas les fichiers collés ni déposés
+const pieces = document.getElementById("pieces");
+const accueillir = async (liste) => {
+  for (const f of liste) {
+    const apercu = document.createElement("div");
+    apercu.className = "file-preview";
+    apercu.dataset.nom = f.name; apercu.dataset.taille = f.size; apercu.dataset.type = f.type;
+    apercu.innerHTML = '<span role="progressbar">envoi…</span>' + f.name;
+    pieces.append(apercu);
+    setTimeout(() => apercu.querySelector("[role=progressbar]").remove(), 700);  // envoi à Google
+  }
+};
+const editeur = document.querySelector(".ql-editor");
+editeur.addEventListener("paste", (e) => {
+  if (window.collageIgnore || !e.clipboardData.files.length) return;
+  e.preventDefault(); accueillir([...e.clipboardData.files]);
+});
+editeur.addEventListener("drop", (e) => {
+  if (window.collageIgnore) return;
+  e.preventDefault(); accueillir([...e.dataTransfer.files]);
+});
+const menuImport = document.getElementById("menu-import");
+document.getElementById("plus").onclick = () => { menuImport.hidden = false; };
+document.getElementById("importer").onclick = () => { menuImport.hidden = true; document.getElementById("fichier").click(); };
+document.getElementById("fichier").onchange = (e) => accueillir([...e.target.files]);
 document.cookie = "session=ok; path=/";
 window.outil = null;
 const menu = document.getElementById("menu");
@@ -41,6 +74,8 @@ const attendre = (ms) => new Promise((ok) => setTimeout(ok, ms));
 document.getElementById("envoyer").onclick = async () => {
   const champ = document.querySelector(".ql-editor");
   const texte = champ.innerText; champ.innerText = "";
+  window.recus = [...pieces.children].map((p) => ({nom: p.dataset.nom, taille: +p.dataset.taille, type: p.dataset.type}));
+  pieces.replaceChildren();
   const q = document.createElement("user-query"); q.textContent = texte;
   document.getElementById("fil").append(q);
   stop.hidden = false;
@@ -61,6 +96,18 @@ document.getElementById("envoyer").onclick = async () => {
     await attendre(1500);
     r.querySelector(".chargement").remove();
     r.insertAdjacentHTML("beforeend", '<video controls src="/fichiers/clip.mp4"></video>');
+  } else if (texte.includes("longue")) {
+    window.arretee = false;
+    stop.onclick = () => { window.arretee = true; stop.hidden = true; };
+    for (const mot of "Il était une fois un très long conte qui ne finissait jamais".split(" ")) {
+      if (window.arretee) return;
+      md.textContent += (md.textContent ? " " : "") + mot;
+      await attendre(250);
+    }
+    stop.hidden = true;
+  } else if (window.recus.length) {
+    md.innerHTML = "<p>J'ai reçu " + window.recus.map((f) => f.nom).join(", ") + ".</p>";
+    stop.hidden = true;
   } else if (texte.includes("blob")) {
     const b = await (await fetch("/fichiers/chat.png")).blob();
     r.insertAdjacentHTML("beforeend", `<img src="${URL.createObjectURL(b)}" width="200" height="200">`);
@@ -151,6 +198,9 @@ def navigateur():
 @pytest.fixture
 def pilote(navigateur, tmp_path, monkeypatch):
     import pilote.medias as medias
+    import pilote.pieces as pieces
+
+    monkeypatch.setattr(pieces, "_ORDRE", [pieces._coller, pieces._deposer, pieces._par_selecteur])
 
     serveur = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Serveur)
     threading.Thread(target=serveur.serve_forever, daemon=True).start()
@@ -219,3 +269,56 @@ def test_deviner_mime_et_variantes():
     assert variantes("https://lh3.googleusercontent.com/gg/ABC=s0", "image") == ["https://lh3.googleusercontent.com/gg/ABC=s0"]
     assert variantes("https://exemple.fr/a.png", "image") == ["https://exemple.fr/a.png"]
     assert variantes("https://lh3.googleusercontent.com/v=1", "video") == ["https://lh3.googleusercontent.com/v=1"]
+
+
+def test_photo_collee_jointe_au_message(pilote):
+    from pilote.modeles import Media
+
+    pilote, _ = pilote
+    resultat = pilote.envoyer(None, "Que vois-tu ?", pieces=(Media("image", "image/png", PETITE, "vacances.png"),))
+    recus = pilote._onglet.page().evaluate("window.recus")
+    assert recus == [{"nom": "vacances.png", "taille": len(PETITE), "type": "image/png"}]
+    assert resultat.reponse == "J'ai reçu vacances.png."
+
+
+def test_fichier_choisi_avec_plus_quand_le_collage_est_ignore(pilote):
+    from pilote.modeles import Media
+
+    pilote, _ = pilote
+    page = pilote._onglet.page()
+    page.evaluate("window.collageIgnore = true")
+    pdf = b"%PDF-1.4 faux"
+    pilote.envoyer(None, "Résume", pieces=(Media("fichier", "application/pdf", pdf, "rapport.pdf"),))
+    # une seule fois, malgré trois façons d'essayer
+    assert page.evaluate("window.recus") == [{"nom": "rapport.pdf", "taille": len(pdf), "type": "application/pdf"}]
+
+
+def test_piece_refusee_erreur_claire(pilote):
+    from pilote.erreurs import PieceRefusee
+    from pilote.modeles import Media
+
+    pilote, _ = pilote
+    page = pilote._onglet.page()
+    page.evaluate("window.collageIgnore = true; document.getElementById('plus').remove()")
+    with pytest.raises(PieceRefusee):
+        pilote.envoyer(None, "x", pieces=(Media("image", "image/png", PETITE, "a.png"),))
+    assert page.evaluate("document.querySelectorAll('user-query').length") == 0  # rien n'est parti
+
+
+def test_reponse_lue_en_direct_puis_arretee(pilote):
+    import threading
+
+    pilote, _ = pilote
+    vus, arret = [], threading.Event()
+
+    def au_fil(texte):
+        vus.append(texte)
+        if len(texte.split()) >= 4:
+            arret.set()
+
+    resultat = pilote.envoyer(None, "Raconte une longue histoire", au_fil=au_fil, arret=arret)
+    assert resultat.interrompue and resultat.reponse.startswith("Il était une fois")
+    assert len(resultat.reponse.split()) < 12  # le conte n'est pas allé au bout
+    assert pilote._onglet.page().evaluate("window.arretee") is True  # « Interrompre » cliqué dans Gemini
+    # chaque lecture prolonge la précédente : le client voit le texte s'écrire
+    assert len(vus) >= 2 and all(b.startswith(a) for a, b in zip(vus, vus[1:]))

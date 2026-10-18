@@ -1,4 +1,5 @@
-"""Les médias créés par Gemini (images, vidéos, sons), gardés sur le PC.
+"""Les médias créés par Gemini (images, vidéos, sons) et les fichiers joints aux messages,
+gardés sur le PC.
 
 Un dossier par conversation (`donnees/medias/<conversation>/`) : retirer la conversation
 de l'historique retire aussi ses médias. Un média est désigné par « <conversation>/<fichier> »,
@@ -18,8 +19,13 @@ from pilote.modeles import Media
 journal = logging.getLogger(__name__)
 
 FORME_CONVERSATION = re.compile(r"[0-9a-f]{32}")
-FORME_FICHIER = re.compile(r"[0-9a-f]{12}\.[a-z0-9]{2,5}")
-MIMES = {ext: mime for mime, ext in EXTENSIONS.items()}
+FORME_FICHIER = re.compile(r"[0-9a-f]{12}\.[a-z0-9]{1,5}")
+# Servis tels quels ; tout autre fichier (HTML, SVG, script…) part en téléchargement.
+MIMES = {ext: mime for mime, ext in EXTENSIONS.items()} | {
+    "pdf": "application/pdf", "txt": "text/plain; charset=utf-8", "md": "text/plain; charset=utf-8",
+    "csv": "text/plain; charset=utf-8", "json": "text/plain; charset=utf-8",
+}
+TYPES_PIECES = ("image", "video", "audio")
 
 
 class Mediatheque:
@@ -34,7 +40,7 @@ class Mediatheque:
         for media in medias:
             dossier = self._dossier / conversation_id
             dossier.mkdir(parents=True, exist_ok=True)
-            fichier = f"{uuid.uuid4().hex[:12]}.{extension(media.mime)}"
+            fichier = f"{uuid.uuid4().hex[:12]}.{_extension(media)}"
             provisoire = dossier / f"{fichier}.part"
             provisoire.write_bytes(media.donnees)
             os.replace(provisoire, dossier / fichier)  # jamais de fichier à moitié écrit
@@ -62,3 +68,17 @@ class Mediatheque:
 
 def mime_de(chemin: Path) -> str:
     return MIMES.get(chemin.suffix.lstrip("."), "application/octet-stream")
+
+
+def type_de(mime: str) -> str:
+    """« image », « video », « audio », ou « fichier » (PDF, texte…) d'après le type MIME."""
+    famille = mime.split("/")[0].lower()
+    return famille if famille in TYPES_PIECES else "fichier"
+
+
+def _extension(media: Media) -> str:
+    """Celle du nom d'origine d'un fichier joint (« rapport.pdf »), sinon d'après son type."""
+    trouve = re.search(r"\.([A-Za-z0-9]{1,5})$", media.description or "")
+    if media.type == "fichier" and trouve:
+        return trouve.group(1).lower()
+    return extension(media.mime)

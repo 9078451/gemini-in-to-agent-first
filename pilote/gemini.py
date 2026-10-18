@@ -4,17 +4,18 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from playwright.sync_api import Error as ErreurPlaywright
 from playwright.sync_api import Locator, Page
 
-from pilote import medias, modes, outils
-from pilote.attente import attendre_envoi, attendre_fin_reponse, attendre_nouvelle_reponse
+from pilote import medias, modes, outils, pieces as pieces_jointes
+from pilote.attente import Interrompue, attendre_envoi, attendre_fin_reponse, attendre_nouvelle_reponse
 from pilote.chrome import OngletGemini
 from pilote.erreurs import (
     DelaiDepasse, ErreurPilote, PageInstable, PasConnecteGoogle, RepereIntrouvable, VerificationGoogle,
 )
-from pilote.modeles import Modes, ResultatGemini
+from pilote.modeles import Media, Modes, ResultatGemini
 from pilote.reperes import attendre_repere, compter, premier_present
 from pilote.selecteurs import BLOC_CODE, CONTENU_REPONSE, DECOR_REPONSE, ENTETE_CODE
 
@@ -129,16 +130,24 @@ class PiloteGemini:
         niveau: str | None = None,
         delai: float | None = None,
         outil: str | None = None,
+        pieces: tuple[Media, ...] = (),
+        au_fil: Callable[[str], None] | None = None,
+        arret: threading.Event | None = None,
     ) -> ResultatGemini:
         """Envoie `texte` dans la conversation `adresse` (None = nouvelle conversation),
         après avoir réglé le modèle et le niveau demandés. `delai` remplace, pour ce
         message, la limite de temps de réponse par défaut. `outil` (« image », « video »,
-        « musique ») coche l'outil de création de Gemini et attend le média."""
+        « musique ») coche l'outil de création de Gemini et attend le média. `pieces` :
+        fichiers joints au message. `au_fil(texte)` reçoit la réponse pendant qu'elle
+        s'écrit ; `arret` levé, la réponse est interrompue (`interrompue`, avec son début)."""
         for essai in (1, 2):
             page, self._message_parti = None, False
             try:
                 page = self._page()
-                return self._envoyer(page, adresse, texte, modele, niveau, delai or self._delai_reponse, outil)
+                return self._envoyer(
+                    page, adresse, texte, modele, niveau, delai or self._delai_reponse, outil,
+                    tuple(pieces), au_fil, arret,
+                )
             except RepereIntrouvable as e:
                 raise RepereIntrouvable(e.nom, self._capturer(page) if page else None) from e
             except ErreurPlaywright as e:
@@ -169,8 +178,10 @@ class PiloteGemini:
 
     def _envoyer(
         self, page: Page, adresse: str | None, texte: str, modele: str | None, niveau: str | None, delai: float,
-        outil: str | None = None,
+        outil: str | None = None, pieces: tuple[Media, ...] = (), au_fil: Callable[[str], None] | None = None,
+        arret: threading.Event | None = None,
     ) -> ResultatGemini:
+        doit_arreter = arret.is_set if arret is not None else (lambda: False)
         recharger = self._outil_coche
         if adresse is None:
             if recharger or not nouvelle_discussion_prete(page.url, self._url_nouvelle, compter(page, "question")):
@@ -195,12 +206,19 @@ class PiloteGemini:
 
         nb_avant = compter(page, "reponse")
         questions_avant = compter(page, "question")
+        if pieces:  # avant le texte : vider la saisie retire une image que l'éditeur aurait collée dans le texte
+            pieces_jointes.joindre(page, list(pieces))
         champ.first.click()
         page.keyboard.press("Control+A")
         page.keyboard.press("Delete")
         # insert_text n'appuie sur aucune touche : les retours à la ligne
         # n'envoient pas le message en morceaux.
         page.keyboard.insert_text(texte)
+        if doit_arreter():  # arrêtée avant l'envoi : rien n'est parti
+            champ.first.click()
+            page.keyboard.press("Control+A")
+            page.keyboard.press("Delete")
+            return ResultatGemini(reponse="", adresse=page.url, modele=self._modele, niveau=self._niveau, interrompue=True)
         attendre_repere(page, "bouton_envoyer", 5).first.click()
         self._message_parti = True
         try:
@@ -219,8 +237,9 @@ class PiloteGemini:
         # avant même d'afficher le début de sa réponse.
         debut = time.monotonic()
         fin = debut + delai
-        nouvelle = self._attendre_nouvelle_reponse(page, nb_avant, questions_avant + 1, delai)
+        nouvelle = None
         try:
+            nouvelle = self._attendre_nouvelle_reponse(page, nb_avant, questions_avant + 1, delai, doit_arreter)
             reponse = attendre_fin_reponse(
                 lire_texte=nouvelle.inner_text,
                 generation_en_cours=lambda: self._generation_en_cours(page),
@@ -229,9 +248,13 @@ class PiloteGemini:
                 lire_medias=lambda: medias.etat_medias(nouvelle),
                 media_attendu=outil is not None,
                 patience_medias=PATIENCE_MEDIAS.get(outil, PATIENCE_MEDIAS[None]),
+                au_fil=au_fil,
+                doit_arreter=doit_arreter,
             )
         except DelaiDepasse as e:
             raise DelaiDepasse(delai, e.partiel) from e  # le message cite la limite entière, pas le reste
+        except Interrompue as e:
+            return self._interrompre(page, nouvelle, e.partiel, round(time.monotonic() - debut, 1))
         duree = round(time.monotonic() - debut, 1)
         trouves, perdus = medias.telecharger_medias(page, nouvelle)
         return ResultatGemini(
@@ -243,6 +266,22 @@ class PiloteGemini:
             duree=duree,
             medias=tuple(trouves),
             medias_perdus=perdus,
+        )
+
+    def _interrompre(self, page: Page, nouvelle: Locator | None, partiel: str, duree: float) -> ResultatGemini:
+        """Clique « Interrompre la réponse » dans Gemini et rend ce qu'il avait déjà écrit."""
+        bouton = premier_present(page, "bouton_arreter")
+        if bouton is not None and bouton.first.is_visible():
+            bouton.first.click(timeout=5000)
+            time.sleep(0.5)  # le texte se fige
+        if nouvelle is not None:
+            try:
+                partiel = nouvelle.inner_text()
+            except ErreurPlaywright:
+                pass
+        return ResultatGemini(
+            reponse=partiel.strip(), adresse=page.url, html=self._html(nouvelle) if nouvelle is not None else "",
+            modele=self._modele, niveau=self._niveau, duree=duree, interrompue=True,
         )
 
     def _page(self) -> Page:
@@ -321,7 +360,9 @@ class PiloteGemini:
                 return
             time.sleep(0.2)
 
-    def _attendre_nouvelle_reponse(self, page: Page, nb_avant: int, nb_questions: int, delai: float) -> Locator:
+    def _attendre_nouvelle_reponse(
+        self, page: Page, nb_avant: int, nb_questions: int, delai: float, doit_arreter: Callable[[], bool],
+    ) -> Locator:
         trouvee = attendre_nouvelle_reponse(
             compter_reponses=lambda: compter(page, "reponse"),
             compter_questions=lambda: compter(page, "question"),
@@ -329,6 +370,7 @@ class PiloteGemini:
             nb_reponses_avant=nb_avant,
             nb_questions_attendu=nb_questions,
             delai=delai,
+            doit_arreter=doit_arreter,
         )
         if not trouvee:
             raise RepereIntrouvable("reponse")

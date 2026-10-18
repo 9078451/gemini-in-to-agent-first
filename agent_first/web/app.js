@@ -1,8 +1,8 @@
 // agent.first — état, affichage et événements de l'app.
-import { appeler } from "./api.js";
+import { appeler, appelerEnDirect } from "./api.js";
 import {
-  OUTILS, avertissementMedia, cheminCourt, choixDisponible, formaterDate, formaterDuree, groupesParDate, limiteOption,
-  metaMessage, outilDuMessage, tailleFichier, texteAttente, titreDepuis,
+  OUTILS, avertissementMedia, cheminCourt, choixDisponible, estInterrompue, formaterDate, formaterDuree, groupesParDate,
+  limiteOption, metaMessage, outilDuMessage, tailleFichier, texteAttente, titreDepuis, trierPieces,
 } from "./outils.js";
 import { avancementPlan, detailTour, infoResultat, libelleEtape, lignesBilan, nombreLignes, normaliserAction, resumeDiff } from "./outils_cowork.js";
 
@@ -33,6 +33,9 @@ const etat = {
   modele: null,
   niveau: null,
   outil: null, // « image », « video », « musique » : Gemini crée ce média (Chat seulement)
+  pieces: [], // fichiers (File) joints au prochain message du Chat
+  envoi: null, // conversation dont un message du Chat attend sa réponse (pour l'arrêter)
+  filtreMedias: "", // galerie du tableau de bord : "", "image", "video", "audio"
   courante: null, // identifiant de la conversation affichée ; null = nouvelle conversation
   occupe: false,
   periode: "7j",
@@ -268,6 +271,7 @@ function bulle(message, reessayer = null) {
       texte.append(etiquette);
     }
     texte.append(document.createTextNode(message.texte));
+    if (message.medias?.length) texte.append(blocPieces(message.medias));
     b.append(texte);
     return b;
   }
@@ -310,7 +314,9 @@ function bulle(message, reessayer = null) {
     }
   });
   const pied = element("div", "message-pied");
-  pied.append(element("span", null, metaMessage(message)), copier);
+  pied.append(element("span", null, metaMessage(message)));
+  if (estInterrompue(message)) pied.append(element("span", "marque-arret", "arrêtée"));
+  pied.append(copier);
   if (message.texte || message.html || !message.medias?.length) carte.append(contenu);
   if (message.medias?.length) carte.append(blocMedias(message.medias));
   carte.append(pied);
@@ -358,13 +364,41 @@ function blocMedias(medias) {
   return bloc;
 }
 
+// Fichiers joints à un message : miniatures pour les images, puces pour le reste.
+function blocPieces(medias) {
+  const bloc = element("div", "pieces-message");
+  for (const m of medias) {
+    const url = m.url ?? `/api/medias/${m.id}`;
+    if (m.type === "image") {
+      const bouton = element("button", "piece-miniature");
+      bouton.type = "button";
+      bouton.title = m.description || "Image jointe";
+      const image = element("img");
+      image.src = url;
+      image.alt = m.description || "Image jointe";
+      bouton.append(image);
+      bouton.addEventListener("click", () => ouvrirVisionneuse(m));
+      bloc.append(bouton);
+    } else {
+      const puce = element("a", "piece-puce");
+      puce.href = m.id ? `${url}?telecharger=true` : url;
+      puce.download = m.description || "";
+      puce.append(icone({ video: "i-video", audio: "i-musique" }[m.type] ?? "i-fichier"),
+        element("span", null, m.description || "fichier"), element("span", "piece-taille", tailleFichier(m.octets)));
+      bloc.append(puce);
+    }
+  }
+  return bloc;
+}
+
 function ouvrirVisionneuse(m) {
-  const url = `/api/medias/${m.id}`;
+  const url = m.url ?? `/api/medias/${m.id}`;
   $("visionneuse-image").src = url;
   $("visionneuse-image").alt = m.description || "Image créée par Gemini";
   $("visionneuse-legende").textContent = m.description || "";
   $("visionneuse-ouvrir").href = url;
-  $("visionneuse-telecharger").href = `${url}?telecharger=true`;
+  $("visionneuse-telecharger").href = m.id ? `${url}?telecharger=true` : url;
+  $("visionneuse-telecharger").hidden = !m.id;
   $("visionneuse").showModal();
 }
 
@@ -431,6 +465,7 @@ function accueilDiscussion() {
 function nouvelleConversation() {
   etat.courante = null;
   etat.outil = null;
+  viderPieces();
   if (etat.mode === "cowork") etat.dossier = lire(CLE_DOSSIER, null);
   $("titre-conversation").textContent = "Nouvelle conversation";
   const defaut = lire(CLE_DEFAUT, {});
@@ -447,6 +482,7 @@ async function ouvrirConversation(identifiant) {
   try {
     const { conversation, messages, tache } = await appeler("GET", `/api/conversations/${identifiant}`);
     etat.courante = conversation.id;
+    viderPieces();
     etat.mode = conversation.mode ?? "chat";
     etat.dossier = conversation.dossier ?? null;
     $("titre-conversation").textContent = conversation.titre || "Conversation";
@@ -477,25 +513,34 @@ async function ouvrirConversation(identifiant) {
   }
 }
 
-async function envoyer(texteImpose = null, outilImpose = undefined) {
+async function envoyer(texteImpose = null, outilImpose = undefined, piecesImposees = null) {
   const texte = (texteImpose ?? $("saisie").value).trim();
   if (!texte || etat.occupe) return;
   if (etat.mode === "cowork") return envoyerCowork(texte);
   const outil = outilImpose === undefined ? etat.outil : outilImpose;
+  const pieces = piecesImposees ?? etat.pieces.slice();
   etat.occupe = true;
   $("form-saisie").classList.add("occupe");
   $("saisie").value = "";
   ajusterSaisie();
+  viderPieces();
 
   const fil = $("fil");
   fil.querySelector(".vide-discussion")?.remove();
-  fil.append(bulle({ role: "toi", texte, details: outil ? JSON.stringify({ outil }) : null }));
+  const apercus = pieces.map((f) => ({ type: f.type.split("/")[0], description: f.name, octets: f.size, url: URL.createObjectURL(f) }));
+  fil.append(bulle({ role: "toi", texte, details: outil ? JSON.stringify({ outil }) : null, medias: apercus }));
   const attente = element("div", "bulle attente");
-  const libelle = element("span", null, texteAttente(outil));
+  const libelle = element("span", null, pieces.length ? "Envoi des fichiers…" : texteAttente(outil));
   attente.append(element("span", "points"), libelle);
   fil.append(attente);
   defilerEnBas();
   if (!etat.courante) $("titre-conversation").textContent = titreDepuis(texte);
+
+  // La réponse s'écrit dans cette bulle pendant que Gemini l'écrit.
+  const direct = element("article", "bulle gemini");
+  const texteDirect = element("div", "markdown en-direct");
+  direct.append(texteDirect, element("div", "message-pied", "Gemini écrit…"));
+  let enCours = attente;
 
   const debut = Date.now();
   signaler(texteAttente(outil), ORANGE);
@@ -506,35 +551,122 @@ async function envoyer(texteImpose = null, outilImpose = undefined) {
   }, 1000);
 
   try {
+    const corps = { texte, modele: etat.modele, niveau: etat.niveau, ...(outil ? { outil } : {}) };
+    if (pieces.length) corps.pieces = await Promise.all(pieces.map(async (f) => ({ nom: f.name, mime: f.type || "application/octet-stream", donnees: await lireBase64(f) })));
     if (!etat.courante) {
       const conversation = await appeler("POST", "/api/conversations", { modele: etat.modele, niveau: etat.niveau });
       etat.courante = conversation.id;
     }
-    const { message, medias_perdus: perdus } = await appeler("POST", `/api/conversations/${etat.courante}/messages`, {
-      texte,
-      modele: etat.modele,
-      niveau: etat.niveau,
-      ...(outil ? { outil } : {}),
+    etat.envoi = etat.courante;
+    montrerArret(true);
+    const fin = await appelerEnDirect(`/api/conversations/${etat.courante}/messages?direct=true`, corps, (ev) => {
+      if (ev.type !== "texte") return;
+      const enBas = fil.scrollHeight - fil.scrollTop - fil.clientHeight < 80;
+      texteDirect.textContent = ev.texte;
+      if (enCours !== direct) {
+        enCours.replaceWith(direct);
+        enCours = direct;
+      }
+      if (enBas) defilerEnBas();
     });
-    attente.replaceWith(bulle(message));
-    const avertissement = avertissementMedia(outil, message.medias, perdus);
+    if (fin?.type === "erreur") throw new Error(fin.erreur);
+    if (fin?.type === "arrete") {
+      enCours.replaceWith(element("div", "bulle note", "Message arrêté avant son envoi à Gemini."));
+      $("saisie").value = texte;
+      ajusterSaisie();
+      signaler("Message arrêté", GRIS);
+      return;
+    }
+    if (fin?.type !== "fin") throw new Error("Réponse interrompue (Agent First arrêté ?).");
+    const { message, medias_perdus: perdus } = fin;
+    enCours.replaceWith(bulle(message));
+    const avertissement = estInterrompue(message) ? null : avertissementMedia(outil, message.medias, perdus);
     if (avertissement) fil.append(element("div", "bulle note", avertissement));
-    signaler(message.medias?.length ? `${message.medias.length} média${message.medias.length > 1 ? "s" : ""} reçu${message.medias.length > 1 ? "s" : ""}` : "Gemini prêt", VERT);
+    const n = message.medias?.length ?? 0;
+    signaler(estInterrompue(message) ? "Réponse arrêtée" : n ? `${n} média${n > 1 ? "s" : ""} reçu${n > 1 ? "s" : ""}` : "Gemini prêt", VERT);
     verifierEtat(); // Chrome et Google viennent de servir : l'état affiché se met à jour
   } catch (e) {
-    attente.replaceWith(bulle({ role: "erreur", texte: e.message }, () => envoyer(texte, outil)));
+    enCours.replaceWith(bulle({ role: "erreur", texte: e.message }, () => envoyer(texte, outil, pieces)));
     $("saisie").value = texte; // pour pouvoir le renvoyer
     ajusterSaisie();
+    if (!etat.pieces.length) ajouterPieces(pieces); // les fichiers aussi
     signaler(e.message === "Agent First n'est pas démarré." ? "Agent First arrêté" : "Erreur", ROUGE);
     verifierEtat(); // met à jour l'état du compte (la pastille garde l'erreur tant que l'envoi est en cours)
     if (/n'est pas proposé|est bloqué/.test(e.message)) chargerModes(); // menus à jour (choix bloqués)
   } finally {
     clearInterval(minuteur);
     etat.occupe = false;
+    etat.envoi = null;
+    montrerArret(false);
+    $("exporter").hidden = !etat.courante;
     $("form-saisie").classList.remove("occupe");
     defilerEnBas();
     chargerConversations();
   }
+}
+
+function lireBase64(fichier) {
+  return new Promise((ok, ko) => {
+    const lecteur = new FileReader();
+    lecteur.onload = () => ok(String(lecteur.result).split(",", 2)[1] ?? "");
+    lecteur.onerror = () => ko(new Error(`Fichier illisible : ${fichier.name}`));
+    lecteur.readAsDataURL(fichier);
+  });
+}
+
+// ---------- fichiers joints ----------
+
+function ajouterPieces(fichiers) {
+  if (etat.mode === "cowork") {
+    signaler("En Cowork, Gemini lit les fichiers du dossier de travail", GRIS);
+    return;
+  }
+  const { acceptees, refus } = trierPieces(etat.pieces.length, [...fichiers]);
+  etat.pieces.push(...acceptees);
+  dessinerPieces();
+  if (refus.length) signaler(`Non joint : ${refus.join(" ; ")}`, ROUGE);
+  else if (acceptees.length) signaler(`${etat.pieces.length} fichier${etat.pieces.length > 1 ? "s" : ""} joint${etat.pieces.length > 1 ? "s" : ""}`, VERT);
+}
+
+function viderPieces() {
+  etat.pieces = [];
+  dessinerPieces();
+}
+
+function dessinerPieces() {
+  const zone = $("pieces");
+  zone.querySelectorAll("img").forEach((i) => URL.revokeObjectURL(i.src));
+  zone.replaceChildren(
+    ...etat.pieces.map((f, rang) => {
+      const puce = element("span", "piece-jointe");
+      puce.title = `${f.name} · ${tailleFichier(f.size)}`;
+      if (f.type.startsWith("image/")) {
+        const image = element("img");
+        image.src = URL.createObjectURL(f);
+        image.alt = "";
+        puce.append(image);
+      } else {
+        puce.append(icone(f.type.startsWith("video/") ? "i-video" : f.type.startsWith("audio/") ? "i-musique" : "i-fichier"));
+      }
+      const retirer = element("button", "piece-retirer");
+      retirer.type = "button";
+      retirer.title = `Retirer ${f.name}`;
+      retirer.setAttribute("aria-label", retirer.title);
+      retirer.append(icone("i-fermer"));
+      retirer.addEventListener("click", () => {
+        etat.pieces.splice(rang, 1);
+        dessinerPieces();
+      });
+      puce.append(element("span", "piece-nom", f.name), retirer);
+      return puce;
+    }),
+  );
+  zone.hidden = !etat.pieces.length;
+}
+
+function montrerArret(visible) {
+  $("arreter").hidden = !visible;
+  $("arreter").title = etat.tache ? "Arrêter la tâche après l'étape en cours" : "Arrêter la réponse de Gemini (ce qu'il a écrit est gardé)";
 }
 
 // ---------- Cowork ----------
@@ -854,7 +986,7 @@ function ecouterFlux(identifiant, depuis = 0) {
   etat.tache = identifiant;
   etat.occupe = true;
   $("form-saisie").classList.add("occupe");
-  $("arreter").hidden = false;
+  montrerArret(true);
   chargerConversations(); // la conversation apparaît tout de suite, avec son point « en cours »
   let actions = 0;
   const source = new EventSource(`/api/cowork/${identifiant}/flux?depuis=${depuis}`);
@@ -903,6 +1035,15 @@ function finirCowork() {
 }
 
 async function arreterTache() {
+  if (!etat.tache && etat.envoi) {
+    try {
+      await appeler("POST", `/api/conversations/${etat.envoi}/arreter`);
+      signaler("Arrêt demandé…", ORANGE);
+    } catch (e) {
+      signaler(e.message, ROUGE);
+    }
+    return;
+  }
   if (!etat.tache) return;
   try {
     await appeler("POST", `/api/cowork/${etat.tache}/arreter`);
@@ -982,6 +1123,9 @@ function dessinerMode() {
   $("choisir-dossier").hidden = etat.mode !== "cowork";
   $("nom-dossier").textContent = etat.dossier ? cheminCourt(etat.dossier) : "Choisir un dossier";
   $("choisir-dossier").title = etat.dossier ? `${etat.dossier} (cliquer pour changer)` : "Choisir le dossier de travail";
+  $("joindre").hidden = etat.mode === "cowork";
+  $("exporter").hidden = !etat.courante;
+  if (etat.mode === "cowork") viderPieces();
   dessinerOutil();
 }
 
@@ -1029,6 +1173,7 @@ async function chargerAccueil() {
     ]);
     dessinerCartes(statistiques);
     dessinerLignes(conversations, recherche);
+    chargerGalerie();
   } catch (e) {
     signaler(e.message, ROUGE);
   }
@@ -1050,6 +1195,39 @@ function dessinerCartes(s) {
       return carte;
     }),
   );
+}
+
+async function chargerGalerie() {
+  let medias;
+  try {
+    medias = await appeler("GET", `/api/medias?${new URLSearchParams({ limite: 24, ...(etat.filtreMedias ? { type: etat.filtreMedias } : {}) })}`);
+  } catch {
+    return;
+  }
+  const panneau = $("panneau-medias");
+  panneau.hidden = !medias.length && !etat.filtreMedias;
+  $("galerie").replaceChildren(
+    ...(medias.length ? medias.map(tuileMedia) : [element("p", "vide", "Aucun média de ce type pour l'instant.")]),
+  );
+}
+
+// Une tuile de la galerie : l'image (visionneuse au clic), ou vidéo/son (ouvre sa conversation).
+function tuileMedia(m) {
+  const tuile = element("button", `tuile tuile-${m.type}`);
+  tuile.type = "button";
+  tuile.title = `${m.titre || "Sans titre"} · ${formaterDate(m.cree_le)}`;
+  if (m.type === "image") {
+    const image = element("img");
+    image.src = `/api/medias/${m.id}`;
+    image.alt = m.description || m.titre || "Image créée par Gemini";
+    image.loading = "lazy";
+    tuile.append(image);
+    tuile.addEventListener("click", () => ouvrirVisionneuse(m));
+  } else {
+    tuile.append(icone(m.type === "video" ? "i-video" : "i-musique"), element("span", "tuile-titre", m.titre || "Sans titre"));
+    tuile.addEventListener("click", () => ouvrirConversation(m.conversation_id));
+  }
+  return tuile;
 }
 
 function dessinerLignes(conversations, recherche) {
@@ -1212,6 +1390,40 @@ function brancherEvenements() {
   $("bouton-modele").addEventListener("click", () => basculerMenu("bouton-modele"));
   $("bouton-niveau").addEventListener("click", () => basculerMenu("bouton-niveau"));
   $("bouton-outil").addEventListener("click", () => basculerMenu("bouton-outil"));
+  $("joindre").addEventListener("click", () => $("fichiers").click());
+  $("fichiers").addEventListener("change", (e) => {
+    ajouterPieces(e.target.files);
+    e.target.value = ""; // le même fichier peut être rejoint plus tard
+  });
+  $("saisie").addEventListener("paste", (e) => {
+    if (e.clipboardData?.files?.length) ajouterPieces(e.clipboardData.files); // une capture d'écran collée
+  });
+  // Glisser-déposer des fichiers n'importe où sur la discussion.
+  const discussion = $("vue-discussion");
+  discussion.addEventListener("dragover", (e) => {
+    if (![...(e.dataTransfer?.types ?? [])].includes("Files")) return;
+    e.preventDefault();
+    $("form-saisie").classList.add("depot");
+  });
+  discussion.addEventListener("dragleave", (e) => {
+    if (!discussion.contains(e.relatedTarget)) $("form-saisie").classList.remove("depot");
+  });
+  discussion.addEventListener("drop", (e) => {
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault();
+    $("form-saisie").classList.remove("depot");
+    ajouterPieces(e.dataTransfer.files);
+  });
+  $("exporter").addEventListener("click", () => {
+    if (etat.courante) window.location.href = `/api/conversations/${etat.courante}/export`;
+  });
+  $("filtre-medias").addEventListener("click", (e) => {
+    const bouton = e.target.closest("[data-type]");
+    if (!bouton) return;
+    etat.filtreMedias = bouton.dataset.type;
+    $("filtre-medias").querySelectorAll("button").forEach((b) => b.classList.toggle("actif", b === bouton));
+    chargerGalerie();
+  });
   $("visionneuse").addEventListener("click", (e) => {
     if (e.target === e.currentTarget) $("visionneuse").close(); // clic à côté de l'image
   });

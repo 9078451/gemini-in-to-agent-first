@@ -7,11 +7,15 @@ exige la clé (`Authorization: Bearer …`), sauf un lien de média signé. L'ap
 reste sur 127.0.0.1:8765. La documentation interactive est sur `/docs`.
 """
 import base64
+import email.parser
+import email.policy
 import json
 import logging
 import os
+import queue
 import threading
 import time
+import uuid
 from collections import OrderedDict
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as DelaiFutur
@@ -24,6 +28,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as ExceptionHttp
 
 from agent_first.cache_modes import CacheModes
@@ -37,16 +42,20 @@ from agent_first.openai_compat import (
     completion,
     empreinte,
     mettre_a_plat,
-    morceaux,
+    morceau,
     nettoyer_reponse,
     niveau_depuis_effort,
+    pieces_du_message,
     resoudre_modele,
+    suite_du_texte,
     texte_message,
     vers_api,
 )
+from agent_first.pieces_jointes import MAX_PIECES, PieceIllisible, depuis_base64, depuis_url
 from agent_first.reponses import garder_reponse
 from agent_first.serveur import reponse_media
 from pilote.erreurs import ChoixBloque, ErreurPilote, ModeleIntrouvable, NiveauIntrouvable
+from pilote.modeles import Media
 
 journal = logging.getLogger(__name__)
 
@@ -96,6 +105,8 @@ class DemandeMedia(BaseModel):
     response_format: Literal["url", "b64_json"] = "url"
     reasoning_effort: str | None = None
     wait: bool = Field(True, description="false : répond tout de suite (202), suivre avec GET /v1/media/generations/{id}")
+    images: list[str] = Field(default_factory=list, max_length=MAX_PIECES,
+                              description="images ou fichiers de départ (adresses data: ou http(s)) : retouche, animation…")
 
 
 class NouvelleTache(BaseModel):
@@ -183,13 +194,18 @@ def creer_api_reseau(
 
     # ---- envoyer à Gemini -----------------------------------------------
 
-    def envoyer(adresse, texte, modele, niveau, outil=None, apres: Callable | None = None) -> tuple[Future, float]:
+    def envoyer(adresse, texte, modele, niveau, outil=None, apres: Callable | None = None,
+                pieces: tuple[Media, ...] = (), au_fil: Callable | None = None) -> tuple[Future, float]:
         """Soumet le message à l'onglet du Chat ; `apres(resultat)` tourne dans la file, juste
         après la réponse : elle est gardée même si le client a abandonné entre-temps."""
         options, limite = {}, delai
         if outil:
             options = {"outil": outil, "delai": delais_media.get(outil)}
             limite = delais_media[outil] + attente_file if outil in delais_media else delai
+        if pieces:
+            options["pieces"] = tuple(pieces)
+        if au_fil is not None:
+            options["au_fil"] = au_fil
 
         def travail(pilote):
             resultat = pilote.envoyer(adresse, texte, modele, niveau, **options)
@@ -247,6 +263,17 @@ def creer_api_reseau(
         except ConversationInconnue:
             pass
 
+    def lire_pieces(adresses: list[tuple[str, str | None]]) -> list[Media]:
+        if len(adresses) > MAX_PIECES:
+            raise HTTPException(400, f"Too many attachments (at most {MAX_PIECES}).")
+        try:
+            return [depuis_url(url, nom) for url, nom in adresses]
+        except PieceIllisible as e:
+            raise HTTPException(400, str(e))
+
+    def garder_pieces(conversation_id: str, pieces: list[Media]) -> list[dict]:
+        return mediatheque.enregistrer(conversation_id, pieces) if mediatheque is not None and pieces else []
+
     # ---- format OpenAI -------------------------------------------------
 
     @v1.get("/models")
@@ -278,21 +305,26 @@ def creer_api_reseau(
         dernier = texte_message(demande.messages[-1].get("content"))
         with verrou:
             connue = memoire.get(empreinte(modele, demande.messages[:-1])) if len(demande.messages) > 1 else None
+        # Les fichiers du dernier message ; dans une conversation Gemini neuve, ceux de tout l'historique.
+        avec_pieces = [demande.messages[-1]] if connue else [m for m in demande.messages if m.get("role") == "user"]
+        pieces = lire_pieces([p for m in avec_pieces for p in pieces_du_message(m.get("content"))])
         if connue:
             conversation_id, adresse, texte = connue[0], connue[1], dernier
         else:
             conversation_id, adresse = historique.creer(modele, niveau, "chat", None, source="api").id, None
             texte = mettre_a_plat(demande.messages)
         if outil:
-            texte = requete_creation(outil, texte, suite=adresse is not None)
+            texte = requete_creation(outil, texte, suite=adresse is not None, joints=bool(pieces))
         _noter(conversation_id, "toi", dernier, modele=modele, niveau=niveau,
-               details=json.dumps({"outil": outil}) if outil else None)
+               details=json.dumps({"outil": outil}) if outil else None, medias=garder_pieces(conversation_id, pieces))
 
         def apres(resultat):
             message, decrits = garder_reponse(historique, mediatheque, conversation_id, resultat)
             return resultat, (message.texte if message else nettoyer_reponse(resultat.reponse)), decrits
 
-        futur, limite = envoyer(adresse, texte, modele, niveau, outil, apres)
+        ecrit: queue.Queue = queue.Queue()
+        au_fil = (lambda brut: ecrit.put(nettoyer_reponse(brut))) if demande.stream else None
+        futur, limite = envoyer(adresse, texte, modele, niveau, outil, apres, tuple(pieces), au_fil)
 
         def repondre(fini) -> tuple[str, str, dict]:
             resultat, contenu, decrits = fini
@@ -314,14 +346,26 @@ def creer_api_reseau(
 
         if demande.stream:
             def flux() -> Iterator[str]:
-                fin = time.monotonic() + limite
+                """Le texte part au fil de l'écriture de Gemini ; les médias, à la fin."""
+                base = {"id": f"chatcmpl-{uuid.uuid4().hex[:24]}", "object": "chat.completion.chunk",
+                        "created": int(time.time()), "model": modele or MODELE_PAR_DEFAUT}
+                yield morceau(base, {"role": "assistant", "content": ""})
+                fin, envoye, calme_depuis = time.monotonic() + limite, "", time.monotonic()
                 while True:
+                    while not ecrit.empty():
+                        ajout = suite_du_texte(envoye, ecrit.get_nowait())
+                        if ajout:
+                            envoye += ajout
+                            calme_depuis = time.monotonic()
+                            yield morceau(base, {"content": ajout})
                     try:
-                        fini = futur.result(timeout=max(0.05, min(PING, fin - time.monotonic())))
+                        fini = futur.result(timeout=max(0.05, min(0.25, fin - time.monotonic())))
                         break
                     except DelaiFutur:
                         if time.monotonic() < fin:
-                            yield ": ping\n\n"
+                            if time.monotonic() - calme_depuis >= PING:
+                                calme_depuis = time.monotonic()
+                                yield ": ping\n\n"
                             continue
                         futur.cancel()
                         code, message = traduire(DelaiFutur(), limite)
@@ -332,7 +376,15 @@ def creer_api_reseau(
                     yield "data: [DONE]\n\n"
                     return
                 contenu, nom, extras = repondre(fini)
-                yield from morceaux(contenu, nom, extras)
+                reste = suite_du_texte(envoye, contenu)
+                if reste is None:  # rare : Gemini a réécrit un passage déjà envoyé
+                    journal.info("Flux : la fin de la réponse ne prolonge pas le texte déjà envoyé")
+                    reste = contenu[len(os.path.commonprefix([envoye, contenu])):]
+                base["model"] = nom
+                if reste or extras:
+                    yield morceau(base, {"content": reste, **extras})
+                yield morceau(base, {}, "stop")
+                yield "data: [DONE]\n\n"
 
             return StreamingResponse(flux(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
@@ -348,18 +400,22 @@ def creer_api_reseau(
     # ---- images, vidéos, musique ---------------------------------------
 
     def creer(outil: str, prompt: str, nombre: int, format: str | None, modele: str | None,
-              niveau: str | None) -> _Creation:
-        """Lance une création dans un fil à part ; `fini` est levé à la fin."""
+              niveau: str | None, pieces: list[Media] | None = None) -> _Creation:
+        """Lance une création dans un fil à part ; `fini` est levé à la fin. `pieces` : les
+        fichiers de départ (photo à retoucher…), joints au premier message."""
+        pieces = pieces or []
         conversation = historique.creer(modele, niveau, "chat", None, source="api")
         creation = _Creation(conversation.id, outil, prompt)
         with verrou:
             creations[creation.id] = creation
             while len(creations) > CREATIONS_MEMORISEES:
                 creations.popitem(last=False)
-        _noter(creation.id, "toi", prompt, modele=modele, niveau=niveau, details=json.dumps({"outil": outil}))
+        _noter(creation.id, "toi", prompt, modele=modele, niveau=niveau, details=json.dumps({"outil": outil}),
+               medias=garder_pieces(creation.id, pieces))
 
         def derouler() -> None:
-            adresse, texte, limite = None, requete_creation(outil, prompt, format), delai
+            adresse, texte, limite = None, requete_creation(outil, prompt, format, joints=bool(pieces)), delai
+            joints = tuple(pieces)
             try:
                 for essai in range(nombre):  # Gemini crée en général un média par message
                     if essai and len(creation.medias) >= nombre:
@@ -368,9 +424,9 @@ def creer_api_reseau(
                     def apres(resultat):
                         return garder_reponse(historique, mediatheque, creation.id, resultat)[1], resultat
 
-                    futur, limite = envoyer(adresse, texte, modele, niveau, outil, apres)
+                    futur, limite = envoyer(adresse, texte, modele, niveau, outil, apres, joints)
                     decrits, resultat = attendre(futur, limite)
-                    adresse, texte = resultat.adresse, VARIANTE[outil]
+                    adresse, texte, joints = resultat.adresse, VARIANTE[outil], ()
                     creation.texte = "\n\n".join(filter(None, [creation.texte, nettoyer_reponse(resultat.reponse)]))
                     creation.medias += [d for d in decrits if d["type"] == TYPE_MEDIA[outil]]
                     if not decrits:
@@ -407,15 +463,40 @@ def creer_api_reseau(
 
     @v1.post("/images/generations")
     def images(demande: DemandeImage, requete: Request):
-        creation = creer("image", demande.prompt, demande.n, format_depuis_taille(demande.size),
-                         modele_demande(demande.model), niveau_depuis_effort(demande.reasoning_effort))
-        creation.fini.wait(limite_creation("image", demande.n) + 5)
+        return creer_images(requete, demande.prompt, demande.n, demande.size, demande.response_format,
+                            demande.model, demande.reasoning_effort)
+
+    @v1.post("/images/edits")
+    async def images_retouchees(requete: Request):
+        """Retoucher une ou plusieurs images (format OpenAI, multipart : `image` ou `image[]`,
+        `prompt`, `n`, `size`, `response_format`) ; aussi en JSON (`images` : adresses). Gemini ne
+        prend pas de masque : `mask` est ignoré, décris la zone à changer dans `prompt`."""
+        champs, pieces = await _formulaire(requete)
+        if not champs.get("prompt", "").strip():
+            raise HTTPException(400, "prompt is required")
+        if not pieces:
+            raise HTTPException(400, "image is required")
+        try:
+            nombre = max(1, min(4, int(champs.get("n") or 1)))
+        except ValueError:
+            raise HTTPException(400, "n must be an integer")
+        format_reponse = champs.get("response_format") or "url"
+        return await run_in_threadpool(
+            creer_images, requete, champs["prompt"], nombre, champs.get("size"), format_reponse,
+            champs.get("model"), champs.get("reasoning_effort"), pieces,
+        )
+
+    def creer_images(requete: Request, prompt: str, nombre: int, taille: str | None, format_reponse: str,
+                     modele: str | None, effort: str | None, pieces: list[Media] | None = None) -> dict:
+        creation = creer("image", prompt, nombre, format_depuis_taille(taille), modele_demande(modele),
+                         niveau_depuis_effort(effort), pieces)
+        creation.fini.wait(limite_creation("image", nombre) + 5)
         if creation.statut != "completed":
             code, message = creation.erreur or (504, "Image creation is still running.")
             raise HTTPException(code, message)
         donnees = []
         for d in creation.medias:
-            if demande.response_format == "b64_json":
+            if format_reponse == "b64_json":
                 contenu = _lire(d)
                 donnees.append({"b64_json": base64.b64encode(contenu).decode("ascii")} if contenu else {"url": lien(requete, d)})
             else:
@@ -424,13 +505,47 @@ def creer_api_reseau(
                 donnees[-1]["revised_prompt"] = creation.texte
         return {"created": creation.cree, "data": donnees}
 
+    async def _formulaire(requete: Request) -> tuple[dict[str, str], list[Media]]:
+        """Les champs et fichiers d'un envoi multipart (sans dépendance de plus), ou d'un JSON."""
+        corps = await requete.body()
+        type_contenu = requete.headers.get("content-type", "")
+        if type_contenu.startswith("application/json"):
+            try:
+                donnees = json.loads(corps or b"{}")
+            except ValueError:
+                raise HTTPException(400, "Invalid JSON body")
+            adresses = donnees.get("images") or ([donnees["image"]] if isinstance(donnees.get("image"), str) else [])
+            champs = {k: str(v) for k, v in donnees.items() if k not in ("images", "image") and v is not None}
+            return champs, await run_in_threadpool(lire_pieces, [(a, None) for a in adresses if isinstance(a, str)])
+        if not type_contenu.startswith("multipart/form-data"):
+            raise HTTPException(400, "Expected multipart/form-data or application/json")
+        message = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(
+            f"Content-Type: {type_contenu}\r\n\r\n".encode("latin-1") + corps)
+        champs, pieces = {}, []
+        for partie in message.iter_parts():
+            nom = partie.get_param("name", header="content-disposition") or ""
+            contenu = partie.get_payload(decode=True) or b""
+            if partie.get_filename() is not None:
+                if nom.startswith("image"):  # « image », « image[] » ; « mask » est ignoré
+                    try:
+                        pieces.append(depuis_base64(partie.get_filename() or "image.png", partie.get_content_type(),
+                                                    base64.b64encode(contenu).decode("ascii")))
+                    except PieceIllisible as e:
+                        raise HTTPException(400, str(e))
+            else:
+                champs[nom] = contenu.decode("utf-8", "replace")
+        if len(pieces) > MAX_PIECES:
+            raise HTTPException(400, f"Too many images (at most {MAX_PIECES}).")
+        return champs, pieces
+
     @v1.post("/media/generations")
     def medias(demande: DemandeMedia, requete: Request):
         outil = outil_depuis(demande.type)
         if outil is None:
             raise HTTPException(400, 'type must be "image", "video" or "music"')
         creation = creer(outil, demande.prompt, demande.n, format_depuis_taille(demande.size),
-                         modele_demande(demande.model), niveau_depuis_effort(demande.reasoning_effort))
+                         modele_demande(demande.model), niveau_depuis_effort(demande.reasoning_effort),
+                         lire_pieces([(a, None) for a in demande.images]))
         en_ligne = demande.response_format == "b64_json"
         if not demande.wait:
             return JSONResponse(status_code=202, content=etat_creation(requete, creation, False))
