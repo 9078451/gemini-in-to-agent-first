@@ -53,6 +53,7 @@ export function remplirReponse(contenu, message) {
     preparerMarkdown(contenu);
   } else {
     contenu.textContent = message.texte;
+    contenu.classList.add("texte-brut"); // sans HTML : garder les retours à la ligne
   }
 }
 

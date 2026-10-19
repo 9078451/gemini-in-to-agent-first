@@ -27,9 +27,21 @@ SONDER = r"""(a) => {
   const bandeau = premiers(a.reperes.limite);
   const n = a.indice === null || a.indice === undefined ? reponses.length - 1 : a.indice;
   const r = n >= 0 && n < reponses.length ? reponses[n] : null;
+  // Texte d'une copie détachée (innerText n'y marche pas) : un retour à la ligne par bloc.
+  const BLOCS = /^(P|DIV|LI|PRE|H[1-6]|TR|UL|OL|TABLE|BLOCKQUOTE|SECTION|ARTICLE|HR)$/;
+  const texteDe = (noeud) => {
+    if (noeud.nodeType === 3) return noeud.nodeValue;
+    if (noeud.nodeType !== 1) return '';
+    if (noeud.tagName === 'BR') return '\n';
+    if (noeud.tagName === 'PRE') return '\n' + noeud.textContent + '\n';
+    const interieur = [...noeud.childNodes].map(texteDe).join('');
+    if (noeud.tagName === 'TD' || noeud.tagName === 'TH') return interieur + '\t';
+    return BLOCS.test(noeud.tagName) ? '\n' + interieur + '\n' : interieur;
+  };
   let html = '';
+  let copie = null;
   if (r && a.html) {
-    const copie = (r.querySelector(a.html.contenu) || r).cloneNode(true);
+    copie = (r.querySelector(a.html.contenu) || r).cloneNode(true);
     copie.querySelectorAll(a.html.code).forEach(bloc => {
       const entete = bloc.querySelector(a.html.entete);
       const langue = entete ? entete.innerText.trim().split('\n')[0].trim() : '';
@@ -39,12 +51,19 @@ SONDER = r"""(a) => {
     copie.querySelectorAll(a.html.decor).forEach(e => e.remove());
     html = copie.innerHTML;
   }
+  let texte = '';
+  if (r) {
+    // Sites : le texte du contenu nettoyé (sans les boutons « Copier »…) ; Gemini : la page telle quelle.
+    texte = copie && a.html.texte_contenu
+      ? texteDe(copie).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+      : r.innerText;
+  }
   return {
     questions: premiers(a.reperes.question).length,
     reponses: reponses.length,
     generation: arreter.length > 0 && visible(arreter[0]),
     limite: bandeau.length && visible(bandeau[0]) ? (bandeau[0].innerText.replace(/\s+/g, ' ').trim() || null) : null,
-    texte: r ? r.innerText : '',
+    texte,
     html,
   };
 }"""

@@ -14,8 +14,10 @@ from agent_first.openai_compat import adresse_reseau
 from fournisseurs.fabriques import fabriques_api, ids_api
 from fournisseurs.memoire import MemoireFils
 from fournisseurs.reglages import ReglagesFournisseurs
-from pilote.chrome import ONGLET_COWORK, ChromeDedie, OngletGemini
+from pilote.chrome import ONGLET_COWORK, ChromeDedie, OngletGemini, OngletSite
 from pilote.gemini import PiloteGemini, ReglagesCompte
+from pilote.site import PiloteSite
+from pilote.sites import PROFILS
 
 
 def main() -> None:
@@ -44,14 +46,22 @@ def main() -> None:
             reglages=reglages_compte,
         )
 
+    def fabrique_site(identifiant: str):
+        profil = PROFILS[identifiant]
+        return lambda role: PiloteSite(
+            OngletSite(chrome, role, url_accueil=profil.url_nouvelle, prefixe=profil.prefixe),
+            profil, config.DELAI_REPONSE, config.STABILITE, config.DOSSIER_JOURNAUX,
+        )
+
     reglages = ReglagesFournisseurs(config.FICHIER_FOURNISSEURS)
     memoire = MemoireFils(config.FICHIER_FILS)
+    fabriques = {**fabriques_api(reglages, memoire), **{i: fabrique_site(i) for i in PROFILS}}
     adresse_api = f"http://{adresse_reseau()}:{config.PORT_API}/v1" if config.API_ACTIVE else None
     agent = assembler(
         fabrique_pilote, chrome.est_lance, Historique(config.FICHIER_HISTORIQUE),
         config.FICHIER_CLE_API if config.API_ACTIVE else None,
         adresse_api=adresse_api, choisir_dossier=choisir_dossier,
-        reglages=reglages, fabriques_autres=fabriques_api(reglages, memoire), paralleles=ids_api(),
+        reglages=reglages, fabriques_autres=fabriques, paralleles=ids_api(),
     )
     serveur_api = None
     if agent.api is not None:

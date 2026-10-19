@@ -412,3 +412,4 @@ dialog[open] { animation: apparaitre .14s ease-out; }
 }
 .point.en-cours { background: var(--accent); animation: pulser 1.4s ease-in-out infinite; }
 input[type="search"]::-webkit-search-cancel-button { display: none; }
+.markdown.texte-brut { white-space: pre-wrap; }
