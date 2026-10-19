@@ -153,6 +153,10 @@ class PiloteGemini:
         self._verifier_acces(page)
         attendre_repere(page, "champ_saisie", 30)
 
+    def ouvrir(self) -> None:
+        """Montre l'onglet (pour se connecter à Google, par exemple)."""
+        self._page().bring_to_front()
+
     def est_connecte(self) -> bool:
         return not self._demande_connexion(self._page())
 
