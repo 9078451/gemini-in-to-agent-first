@@ -6,6 +6,8 @@ Playwright et son onglet, utilisés uniquement depuis ce fil (Playwright synchro
 l'exige).
 """
 import json
+import logging
+import socket
 import subprocess
 import threading
 import time
@@ -16,6 +18,8 @@ from playwright.sync_api import Browser, Page, Playwright, sync_playwright
 from playwright.sync_api import Error as ErreurPlaywright
 
 from pilote.erreurs import ChromeInjoignable
+
+journal = logging.getLogger(__name__)
 
 ONGLET_COWORK = "cowork"
 ONGLET_CHAT = "chat"
@@ -31,23 +35,42 @@ DRAPEAUX_SANS_VEILLE = [
     "--disable-renderer-backgrounding",
     "--disable-background-timer-throttling",
 ]
+# Écrit par Chrome dans le profil : le port de débogage réellement ouvert (1re ligne).
+FICHIER_PORT = "DevToolsActivePort"
+
+
+def port_utilisable(port: int) -> bool:
+    """Faux si le port est pris, ou réservé par Windows (Hyper-V/WSL réservent des plages
+    au démarrage, par exemple 9123-9222 : Chrome n'y ouvre alors pas son port)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", port))
+        return True
+    except OSError:
+        return False
 
 
 class ChromeDedie:
     def __init__(self, chemin_chrome: Path, dossier_profil: Path, port: int, url_accueil: str) -> None:
         self._chemin_chrome = chemin_chrome
         self._dossier_profil = dossier_profil
-        self.port = port
+        self.port = port  # port préféré ; s'il est indisponible, Chrome en choisit un libre
+        self._port_actuel: int | None = None
         self.url_accueil = url_accueil
         self._verrou_lancement = threading.Lock()
         # Choisir et marquer un onglet se fait sous ce verrou : un fil ne prend jamais
         # l'onglet qu'un autre vient d'ouvrir et n'a pas encore marqué.
         self.verrou_onglets = threading.Lock()
 
-    def commande_lancement(self) -> list[str]:
+    @property
+    def port_actuel(self) -> int:
+        """Le port de débogage du Chrome lancé (le préféré tant qu'on ne l'a pas trouvé)."""
+        return self._port_actuel or self.port
+
+    def commande_lancement(self, port: int | None = None) -> list[str]:
         return [
             str(self._chemin_chrome),
-            f"--remote-debugging-port={self.port}",
+            f"--remote-debugging-port={self.port if port is None else port}",
             f"--user-data-dir={self._dossier_profil}",
             "--no-first-run",
             "--no-default-browser-check",
@@ -56,12 +79,13 @@ class ChromeDedie:
         ]
 
     def est_lance(self) -> bool:
-        try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json/version", timeout=1) as reponse:
-                json.load(reponse)
-            return True
-        except (OSError, ValueError):
-            return False
+        """Vrai si le Chrome dédié répond : sur le dernier port connu, le port préféré, ou
+        celui que Chrome a écrit dans le profil (port choisi par lui)."""
+        for port in dict.fromkeys(p for p in (self._port_actuel, self.port, self._port_ecrit()) if p):
+            if self._repond(port):
+                self._port_actuel = port
+                return True
+        return False
 
     def lancer(self, delai: float = 15.0) -> None:
         """Lance Chrome s'il ne l'est pas. Deux fils qui le demandent en même temps
@@ -70,13 +94,36 @@ class ChromeDedie:
             if self.est_lance():
                 return
             self._dossier_profil.mkdir(parents=True, exist_ok=True)
-            subprocess.Popen(self.commande_lancement())
+            port = self.port
+            if not port_utilisable(port):
+                # 0 : Chrome prend un port libre et l'écrit dans le profil (FICHIER_PORT).
+                journal.warning("Port %d indisponible (réservé par Windows ?) : Chrome choisit un port libre", port)
+                port = 0
+            try:
+                (self._dossier_profil / FICHIER_PORT).unlink(missing_ok=True)  # celui d'une session finie
+            except OSError:
+                pass
+            subprocess.Popen(self.commande_lancement(port))
             fin = time.monotonic() + delai
             while time.monotonic() < fin:
                 if self.est_lance():
                     return
                 time.sleep(0.3)
         raise ChromeInjoignable()
+
+    def _port_ecrit(self) -> int | None:
+        try:
+            return int((self._dossier_profil / FICHIER_PORT).read_text(encoding="utf-8").splitlines()[0])
+        except (OSError, ValueError, IndexError):
+            return None
+
+    @staticmethod
+    def _repond(port: int) -> bool:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as reponse:
+                return "Browser" in json.load(reponse)  # c'est bien un Chrome, pas un autre programme
+        except (OSError, ValueError, TypeError):
+            return False
 
 
 def choisir_onglet(
@@ -145,7 +192,7 @@ class OngletSite:
             if self._playwright is None:
                 self._playwright = sync_playwright().start()
             try:
-                self._navigateur = self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{self._chrome.port}")
+                self._navigateur = self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{self._chrome.port_actuel}")
             except ErreurPlaywright as e:
                 raise ChromeInjoignable() from e
         return self._navigateur

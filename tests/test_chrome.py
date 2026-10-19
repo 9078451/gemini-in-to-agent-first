@@ -193,3 +193,80 @@ def test_onglet_garde_tant_qu_il_reste_ouvert():
     gemini.fermee = True  # fenêtre fermée par l'utilisateur
     nouvelle = onglet.page()
     assert nouvelle is not gemini and nouvelle.marque == "cowork"
+
+
+# ---- port de débogage indisponible (réservé par Windows) -----------------------
+
+import json  # noqa: E402
+import threading as _threading  # noqa: E402
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E402
+
+from pilote.chrome import FICHIER_PORT, port_utilisable  # noqa: E402
+
+
+def faux_chrome():
+    class Gestion(BaseHTTPRequestHandler):
+        def do_GET(self):
+            corps = json.dumps({"Browser": "Chrome/155"}).encode()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(corps)
+
+        def log_message(self, *args):
+            pass
+
+    serveur = ThreadingHTTPServer(("127.0.0.1", 0), Gestion)
+    _threading.Thread(target=serveur.serve_forever, daemon=True).start()
+    return serveur
+
+
+def test_port_pris_pas_utilisable():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        s.listen()
+        assert port_utilisable(s.getsockname()[1]) is False
+    assert port_utilisable(port_libre()) is True
+
+
+def test_port_ecrit_par_chrome_dans_le_profil(tmp_path):
+    serveur = faux_chrome()
+    try:
+        (tmp_path / FICHIER_PORT).write_text(f"{serveur.server_address[1]}\n/devtools/browser/x", encoding="utf-8")
+        chrome = ChromeDedie(Path("C:/chrome.exe"), tmp_path, port_libre(), GEMINI)
+        assert chrome.est_lance() is True
+        assert chrome.port_actuel == serveur.server_address[1]
+    finally:
+        serveur.shutdown()
+
+
+def test_port_reserve_chrome_choisit_un_port_libre(tmp_path, monkeypatch):
+    from pilote import chrome as module
+
+    with socket.socket() as occupe:
+        occupe.bind(("127.0.0.1", 0))
+        occupe.listen()
+        lances = []
+        chrome = ChromeDedie(Path("C:/chrome.exe"), tmp_path, occupe.getsockname()[1], GEMINI)
+        monkeypatch.setattr(module.subprocess, "Popen", lambda commande: lances.append(commande))
+        monkeypatch.setattr(chrome, "est_lance", lambda: bool(lances))
+        chrome.lancer(delai=2)
+    assert "--remote-debugging-port=0" in lances[0]
+
+
+def test_un_autre_programme_sur_le_port_n_est_pas_chrome(tmp_path):
+    class Autre(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"autre": true}')
+
+        def log_message(self, *args):
+            pass
+
+    serveur = ThreadingHTTPServer(("127.0.0.1", 0), Autre)
+    _threading.Thread(target=serveur.serve_forever, daemon=True).start()
+    try:
+        chrome = ChromeDedie(Path("C:/chrome.exe"), tmp_path, serveur.server_address[1], GEMINI)
+        assert chrome.est_lance() is False
+    finally:
+        serveur.shutdown()

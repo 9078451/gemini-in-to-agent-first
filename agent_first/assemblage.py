@@ -32,6 +32,19 @@ from pilote.chrome import ONGLET_CHAT, ONGLET_COWORK
 from pilote.modeles import Modes, Option, Pilote
 
 
+class PortsInterdits:
+    """Les ports qu'une visite de Cowork ne doit pas joindre : ceux d'Agent First (sinon le
+    modèle validerait ses propres accords) et celui du Chrome dédié, qui peut changer d'un
+    lancement à l'autre (port réservé par Windows)."""
+
+    def __init__(self, fixes: set[int], port_chrome: Callable[[], int] | None = None) -> None:
+        self._fixes = frozenset(fixes)
+        self._port_chrome = port_chrome
+
+    def __contains__(self, port: object) -> bool:
+        return port in self._fixes or (self._port_chrome is not None and port == self._port_chrome())
+
+
 @dataclass
 class AgentFirst:
     file_cowork: FileAttente
@@ -57,6 +70,7 @@ def assembler(
     reglages: ReglagesFournisseurs | None = None,
     fabriques_autres: dict[str, Callable[[str], Pilote]] | None = None,
     paralleles: set[str] | None = None,
+    port_chrome: Callable[[], int] | None = None,
 ) -> AgentFirst:
     """`fabrique_pilote(role)` fabrique le pilote d'un onglet de Gemini ; elle est appelée dans
     le fil de sa file. `fabriques_autres` : les autres fournisseurs (ceux de `paralleles` sans
@@ -70,8 +84,8 @@ def assembler(
         [Option(n, d, n == config.MODELE_ACTIF_PAR_DEFAUT) for n, d in config.MODELES_PAR_DEFAUT],
         [Option(n, d, n == config.NIVEAU_ACTIF_PAR_DEFAUT) for n, d in config.NIVEAUX_PAR_DEFAUT],
     )
-    # Gemini ne doit pas pouvoir joindre Agent First (il validerait ses propres accords) ni le Chrome dédié.
-    ports_interdits = frozenset({config.PORT_AGENT, config.PORT_API, config.PORT_CHROME})
+    # Le modèle ne doit pas pouvoir joindre Agent First (il validerait ses propres accords) ni le Chrome dédié.
+    ports_interdits = PortsInterdits({config.PORT_AGENT, config.PORT_API, config.PORT_CHROME}, port_chrome)
 
     def fabrique_executeur(dossier, processus, arret):
         return Executeur(

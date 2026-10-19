@@ -61,7 +61,7 @@ def main() -> None:
         fabrique_pilote, chrome.est_lance, Historique(config.FICHIER_HISTORIQUE),
         config.FICHIER_CLE_API if config.API_ACTIVE else None,
         adresse_api=adresse_api, choisir_dossier=choisir_dossier,
-        reglages=reglages, fabriques_autres=fabriques, paralleles=ids_api(),
+        reglages=reglages, fabriques_autres=fabriques, paralleles=ids_api(), port_chrome=lambda: chrome.port_actuel,
     )
     serveur_api = None
     if agent.api is not None:

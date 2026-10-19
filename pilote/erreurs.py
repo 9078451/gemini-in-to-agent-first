@@ -28,7 +28,10 @@ class ChromeInjoignable(ErreurPilote):
     secours = True
 
     def __init__(self) -> None:
-        super().__init__("Impossible de joindre le Chrome dédié (port de débogage fermé).")
+        super().__init__(
+            "Impossible de joindre le Chrome dédié (port de débogage fermé). S'il est ouvert, "
+            "ferme-le : Agent First le relancera au prochain message."
+        )
 
 
 class PasConnecteGoogle(ErreurPilote):
