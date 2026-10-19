@@ -29,7 +29,7 @@ class FauxPilote:
         self._erreur = erreur
         self.envois = []
 
-    def envoyer(self, adresse, texte, modele=None, niveau=None, delai=None):
+    def envoyer(self, adresse, texte, modele=None, niveau=None, delai=None, au_fil=None):
         if self._erreur:
             raise self._erreur
         self.envois.append({"adresse": adresse, "texte": texte, "modele": modele, "niveau": niveau})

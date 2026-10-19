@@ -171,6 +171,13 @@ class Historique:
             )
             self._base.commit()
 
+    def regler_modele(self, identifiant: str, modele: str | None, niveau: str | None) -> None:
+        """Autre modèle ou niveau chez le même fournisseur : la conversation continue."""
+        with self._verrou:
+            self._conversation(identifiant)
+            self._base.execute("UPDATE conversations SET modele = ?, niveau = ? WHERE id = ?", (modele, niveau, identifiant))
+            self._base.commit()
+
     def renommer(self, identifiant: str, titre: str) -> None:
         with self._verrou:
             self._conversation(identifiant)

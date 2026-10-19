@@ -1,5 +1,6 @@
 """L'API réseau d'Agent First : d'autres programmes (sur ce PC ou sur le réseau)
-discutent avec Gemini au format OpenAI, ou lancent et suivent des tâches Cowork.
+discutent avec Gemini (ou un autre fournisseur actif : `model` = « fournisseur/modèle »)
+au format OpenAI, ou lancent et suivent des tâches Cowork.
 
 Elle écoute sur un port à part (8766, toutes les interfaces) ; chaque route `/v1`
 exige la clé (`Authorization: Bearer …`). L'app, elle, reste sur 127.0.0.1:8765.
@@ -10,7 +11,6 @@ import logging
 import os
 import threading
 from collections import OrderedDict
-from concurrent.futures import TimeoutError as DelaiFutur
 from pathlib import Path
 from typing import Iterator
 
@@ -23,6 +23,8 @@ from starlette.exceptions import HTTPException as ExceptionHttp
 from agent_first.cache_modes import CacheModes
 from agent_first.cle_api import GardeCle
 from agent_first.cowork_service import ServiceCowork, TacheEnCours
+from agent_first.discussion import EchecEnvoi, ServiceChat
+from agent_first.en_direct import en_direct
 from agent_first.file_attente import FileAttente
 from agent_first.fils_serveur import plus_de_fils
 from agent_first.historique import ConversationInconnue, Historique
@@ -30,13 +32,17 @@ from agent_first.openai_compat import (
     completion,
     empreinte,
     mettre_a_plat,
-    morceaux,
-    nettoyer_reponse,
+    morceaux_en_direct,
     niveau_depuis_effort,
     texte_message,
     vers_api,
 )
-from pilote.erreurs import ChoixBloque, ErreurPilote, ModeleIntrouvable, NiveauIntrouvable
+from fournisseurs.catalogue import CATALOGUE, PAR_DEFAUT
+from fournisseurs.reglages import ReglagesFournisseurs
+from fournisseurs.repartiteur import Repartiteur
+from fournisseurs.service import ServiceFournisseurs
+from pilote.chrome import ONGLET_CHAT
+from pilote.erreurs import ErreurPilote
 
 journal = logging.getLogger(__name__)
 
@@ -48,6 +54,17 @@ TYPES_ERREUR = {
 MESSAGES_CLE = {401: "Missing or invalid API key (Authorization: Bearer <key>).",
                 429: "Too many invalid keys from this address: try again in a minute."}
 MODELE_PAR_DEFAUT = "agent-first"  # = le modèle déjà choisi dans Gemini
+
+
+def decouper_modele(model: str | None) -> tuple[str, str | None]:
+    """`model` d'une demande → (fournisseur, modèle). « claude/… », « ollama/llama3.2 »,
+    « openrouter/meta/llama-3 » ; sinon un modèle de Gemini (ou celui déjà choisi)."""
+    if not model or model == MODELE_PAR_DEFAUT:
+        return PAR_DEFAUT, None
+    prefixe, _, reste = model.partition("/")
+    if reste and prefixe in CATALOGUE:
+        return prefixe, reste
+    return PAR_DEFAUT, model
 
 
 class DemandeChat(BaseModel):
@@ -83,8 +100,10 @@ def creer_api_reseau(
     modes: CacheModes,
     delai: float,
     niveau_cowork: str | None = None,
+    fournisseurs: ServiceFournisseurs | None = None,
 ) -> FastAPI:
-    """`file_chat` : la file de l'onglet du Chat ; les tâches Cowork passent par celle de `cowork`."""
+    """`file_chat` : la file de l'onglet du Chat de Gemini ; `fournisseurs` donne celles des
+    autres (sans lui : Gemini seul). Les tâches Cowork passent par le service `cowork`."""
     app = FastAPI(
         title="Agent First — API réseau",
         description="Gemini au format OpenAI (`/v1/chat/completions`) et tâches Cowork (`/v1/cowork`). "
@@ -92,7 +111,10 @@ def creer_api_reseau(
         version="3",
         lifespan=plus_de_fils,
     )
-    memoire: OrderedDict[str, tuple[str, str]] = OrderedDict()  # empreinte → (conversation, adresse Gemini)
+    if fournisseurs is None:
+        fournisseurs = ServiceFournisseurs(ReglagesFournisseurs(None), Repartiteur.unique(PAR_DEFAUT, ONGLET_CHAT, file_chat), modes)
+    chat = ServiceChat(historique, fournisseurs, delai)
+    memoire: OrderedDict[str, str] = OrderedDict()  # empreinte de l'historique → conversation
     verrou = threading.Lock()
 
     # Celle de Starlette (parente de celle de FastAPI) : corps illisible, route inconnue… aussi au format OpenAI.
@@ -116,64 +138,70 @@ def creer_api_reseau(
 
     @v1.get("/models")
     def modeles():
-        lus = modes.lire()
-        return {
-            "object": "list",
-            "data": [
-                {"id": o.nom, "object": "model", "created": 0, "owned_by": "google-gemini", "description": o.description}
-                for o in lus.modeles
-            ],
-        }
+        donnees = [
+            {"id": o.nom, "object": "model", "created": 0, "owned_by": "google-gemini", "description": o.description}
+            for o in modes.lire().modeles
+        ]
+        for fournisseur in fournisseurs.actifs():
+            if fournisseur != PAR_DEFAUT:
+                donnees += [{"id": f"{fournisseur}/{o.nom}", "object": "model", "created": 0, "owned_by": fournisseur,
+                             "description": fournisseurs.nom(fournisseur)} for o in fournisseurs.modes(fournisseur).modeles]
+        return {"object": "list", "data": donnees}
 
     @v1.post("/chat/completions")
-    def chat(demande: DemandeChat):
+    def chat_completions(demande: DemandeChat):
         if not any(m.get("role") == "user" for m in demande.messages):
             raise HTTPException(400, "messages must contain at least one user message")
-        modele = demande.model if demande.model and demande.model != MODELE_PAR_DEFAUT else None
+        fournisseur, modele = decouper_modele(demande.model)
+        if not fournisseurs.est_actif(fournisseur):
+            raise HTTPException(400, f"Provider « {fournisseur} » is unknown or disabled in Agent First.")
         niveau = niveau_depuis_effort(demande.reasoning_effort)
         dernier = texte_message(demande.messages[-1].get("content"))
         with verrou:
-            connue = memoire.get(empreinte(modele, demande.messages[:-1])) if len(demande.messages) > 1 else None
+            connue = memoire.get(empreinte(demande.model, demande.messages[:-1])) if len(demande.messages) > 1 else None
         if connue:
-            conversation_id, adresse, texte = connue[0], connue[1], dernier
+            conversation_id, texte_pilote = connue, None
         else:
-            conversation_id, adresse = historique.creer(modele, niveau, "chat", None, source="api").id, None
-            texte = mettre_a_plat(demande.messages)
-        _noter(conversation_id, "toi", dernier, modele=modele, niveau=niveau)
-        futur = file_chat.soumettre(lambda pilote: pilote.envoyer(adresse, texte, modele, niveau))
-        try:
-            resultat = futur.result(timeout=delai)
-        except DelaiFutur:
-            raise HTTPException(504, f"No answer from Gemini after {delai:.0f} s (Agent First may be busy).")
-        except (ModeleIntrouvable, NiveauIntrouvable, ChoixBloque) as e:
-            modes.oublier()
-            raise HTTPException(400, str(e))
-        except ErreurPilote as e:
-            raise HTTPException(502, str(e))
-        except Exception as e:
-            journal.exception("Erreur inattendue pendant un appel de l'API réseau")
-            raise HTTPException(500, f"Unexpected error: {e}")
-        contenu = nettoyer_reponse(resultat.reponse)
-        try:
-            historique.enregistrer_adresse(conversation_id, resultat.adresse)
-        except ConversationInconnue:
-            pass  # retirée de l'historique entre-temps : la réponse part quand même
-        _noter(conversation_id, "gemini", contenu, modele=resultat.modele, niveau=resultat.niveau, duree=resultat.duree)
-        suite = demande.messages + [{"role": "assistant", "content": contenu}]
-        with verrou:
-            memoire[empreinte(modele, suite)] = (conversation_id, resultat.adresse)
-            while len(memoire) > CONVERSATIONS_MEMORISEES:
-                memoire.popitem(last=False)
-        nom = resultat.modele or modele or MODELE_PAR_DEFAUT
-        if demande.stream:
-            return StreamingResponse(morceaux(contenu, nom), media_type="text/event-stream")
-        return completion(contenu, nom, texte)
+            conversation_id = historique.creer(modele, niveau, "chat", None, source="api", fournisseur=fournisseur).id
+            texte_pilote = mettre_a_plat(demande.messages)
 
-    def _noter(conversation_id: str, role: str, texte: str, **details) -> None:
+        def envoyer(au_fil=None, arret=None) -> dict:
+            try:
+                message = chat.envoyer(conversation_id, dernier, fournisseur, modele, niveau, au_fil=au_fil, arret=arret,
+                                       texte_pilote=texte_pilote)
+            except ConversationInconnue:  # retirée de l'historique entre-temps
+                raise HTTPException(404, "Conversation removed from Agent First during the call.")
+            suite = demande.messages + [{"role": "assistant", "content": message["texte"]}]
+            with verrou:
+                memoire[empreinte(demande.model, suite)] = conversation_id
+                while len(memoire) > CONVERSATIONS_MEMORISEES:
+                    memoire.popitem(last=False)
+            return message
+
+        def nom(message: dict | None = None) -> str:
+            modele_lu = (message or {}).get("modele") or modele
+            if not modele_lu:
+                return MODELE_PAR_DEFAUT
+            return modele_lu if fournisseur == PAR_DEFAUT else f"{fournisseur}/{modele_lu}"
+
+        if demande.stream:
+            arret = threading.Event()
+
+            def travail(au_fil) -> dict:
+                try:
+                    return {"type": "message", "message": envoyer(au_fil, arret)}
+                except EchecEnvoi as e:
+                    return {"type": "erreur", "code": e.code, "erreur": e.message}
+                except HTTPException as e:
+                    return {"type": "erreur", "code": e.status_code, "erreur": str(e.detail)}
+
+            evenements = en_direct(travail, arret, nom="api-reponse")
+            return StreamingResponse(morceaux_en_direct(evenements, nom()), media_type="text/event-stream")
         try:
-            historique.ajouter_message(conversation_id, role, texte, **details)
-        except ConversationInconnue:
-            pass
+            message = envoyer()
+        except EchecEnvoi as e:
+            raise HTTPException(e.code, e.message)
+        return completion(message["texte"], nom(message), texte_pilote or dernier)
 
     # ---- Cowork --------------------------------------------------------
 
@@ -182,12 +210,16 @@ def creer_api_reseau(
         refus = _dossier_refuse(demande.folder)
         if refus:
             raise HTTPException(400, refus)
+        fournisseur, modele = decouper_modele(demande.model)
+        if not fournisseurs.est_actif(fournisseur):
+            raise HTTPException(400, f"Provider « {fournisseur} » is unknown or disabled in Agent First.")
         # Sans niveau demandé : celui de l'app (Min.). Gemini garderait son réglage, souvent « Max. »,
         # qui abandonne une longue demande Cowork sans répondre (vu en essai réel).
         niveau = niveau_depuis_effort(demande.reasoning_effort) or niveau_cowork
-        modele = demande.model if demande.model and demande.model != MODELE_PAR_DEFAUT else None
+        if not fournisseurs.a_des_niveaux(fournisseur):
+            niveau = None
         dossier = str(Path(demande.folder).resolve())
-        conversation = historique.creer(modele, niveau, "cowork", dossier, source="api")
+        conversation = historique.creer(modele, niveau, "cowork", dossier, source="api", fournisseur=fournisseur)
         return _lancer(conversation.id, demande.request)
 
     @v1.post("/cowork/{identifiant}/messages")
@@ -203,9 +235,11 @@ def creer_api_reseau(
         conversation = historique.conversation(identifiant)
         try:  # le service enregistre le message s'il accepte la tâche
             cowork.demarrer(identifiant, conversation.dossier, conversation.adresse, texte,
-                            conversation.modele, conversation.niveau)
+                            conversation.modele, conversation.niveau, fournisseur=conversation.fournisseur)
         except TacheEnCours:
             raise HTTPException(409, "A task is already running in this conversation: wait for it or stop it.")
+        except ErreurPilote as e:
+            raise HTTPException(400, str(e))
         return {"id": identifiant, "status": cowork.etat(identifiant)["statut"]}
 
     @v1.get("/cowork/{identifiant}")

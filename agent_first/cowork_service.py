@@ -17,6 +17,12 @@ from typing import Callable, Iterator, TypeVar
 from agent_first.diffuseur import Diffuseur
 from agent_first.file_attente import FileAttente
 from agent_first.historique import Historique
+from agent_first.openai_compat import mettre_a_plat
+from fournisseurs.catalogue import MODELE_SITE, PAR_DEFAUT
+from fournisseurs.etats import classer as classer_erreur
+from fournisseurs.repartiteur import Repartiteur
+from pilote.chrome import ONGLET_COWORK
+from pilote.erreurs import ErreurPilote
 from cowork.actions import Executeur
 from cowork.boucle import Branchements, Reglages, executer_tache
 from cowork.catalogue import Action, Resultat
@@ -44,6 +50,8 @@ LIBELLE_FIN = {
     "termine": "done", "limite": "stopped (round limit)", "arret": "stopped", "erreur": "error", "question": "asked a question",
 }
 TACHES_RESUMEES = 10  # demandes précédentes résumées quand une conversation Gemini neuve démarre
+RAISONS_SECOURS = {"limite": "à sa limite", "deconnecte": "déconnecté", "panne": "en panne"}
+NIVEAU_SECOURS = "Min."  # en Cowork, comme par défaut : « Max. » peut abandonner une longue demande
 
 
 class TacheEnCours(Exception):
@@ -72,7 +80,7 @@ class _Session:
 class ServiceCowork:
     def __init__(
         self,
-        file: FileAttente,
+        file: FileAttente | Repartiteur,
         historique: Historique,
         fabrique_executeur: Callable[[Path, GestionnaireProcessus, threading.Event], Executeur],
         reglages: Reglages,
@@ -82,8 +90,12 @@ class ServiceCowork:
         diffuseur: Diffuseur | None = None,
         max_entrees: int = 150,
         tours_max: int = 30,
+        fournisseurs=None,
     ) -> None:
-        self._file = file
+        # Une file par fournisseur (le répartiteur), ou une seule file : celle de Gemini.
+        self._repartiteur = file if isinstance(file, Repartiteur) else Repartiteur.unique(PAR_DEFAUT, ONGLET_COWORK, file)
+        # ServiceFournisseurs : secours et états des fournisseurs (None : pas de secours).
+        self._fournisseurs = fournisseurs
         self._historique = historique
         self._fabrique_executeur = fabrique_executeur
         self._reglages = reglages
@@ -108,10 +120,12 @@ class ServiceCowork:
     # ---- lancer une tâche -----------------------------------------------
 
     def demarrer(
-        self, conversation_id: str, dossier: str, adresse: str | None, texte: str, modele, niveau
+        self, conversation_id: str, dossier: str, adresse: str | None, texte: str, modele, niveau,
+        fournisseur: str = PAR_DEFAUT,
     ) -> None:
         """Lance la tâche et enregistre le message de l'utilisateur, une fois la conversation
         réservée : refusé (TacheEnCours), il ne laisse rien dans l'historique."""
+        file = self._repartiteur.file(fournisseur, ONGLET_COWORK)  # FournisseurInconnu avant tout le reste
         with self._verrou:
             ancienne = self._sessions.get(conversation_id)
             if ancienne is not None and not ancienne.fini:
@@ -127,12 +141,25 @@ class ServiceCowork:
         self._emettre(conversation_id, session, {"type": "statut", "statut": "queued"})
 
         def travail(pilote) -> None:
-            etat = {"adresse": adresse}
+            etat = {"adresse": adresse, "fournisseur": fournisseur, "modele": modele, "niveau": niveau}
+            echanges: list[dict] = []  # cette tâche, au format OpenAI : ce que reçoit un secours
 
             def envoyer(msg: str) -> str:
                 if session.arret.is_set():
                     raise _Arret()
-                resultat = pilote.envoyer(etat["adresse"], msg, modele, niveau, delai=self._delai_reponse)
+                try:
+                    resultat = self._envoyer_chez(pilote, fournisseur, etat, msg)
+                except ErreurPilote as e:
+                    secours = self._secours_pour(etat["fournisseur"], e)
+                    if secours is None:
+                        raise
+                    de = etat["fournisseur"]
+                    etat.update(adresse=None, **secours)
+                    self._historique.changer_fournisseur(conversation_id, etat["fournisseur"], etat["modele"], etat["niveau"])
+                    self._emettre(conversation_id, session, {"type": "secours", "corps": self._phrase_secours(de, e, etat)})
+                    a_plat = mettre_a_plat(echanges + [{"role": "user", "content": msg}]) if echanges else msg
+                    resultat = self._envoyer_chez(pilote, fournisseur, etat, a_plat)
+                echanges.extend([{"role": "user", "content": msg}, {"role": "assistant", "content": resultat.reponse}])
                 self._historique.compter_tour(conversation_id)
                 etat["adresse"] = resultat.adresse
                 if etat["adresse"]:
@@ -182,7 +209,44 @@ class ServiceCowork:
             finally:
                 self._finir(session)
 
-        self._file.soumettre(travail)
+        file.soumettre(travail)
+
+    def _envoyer_chez(self, pilote, fournisseur_tache: str, etat: dict, msg: str):
+        """Envoie au fournisseur courant de la tâche : directement si c'est celui de la file où
+        tourne la tâche, sinon (après un secours) dans la file de Cowork du secours."""
+        modele = None if etat["modele"] == MODELE_SITE else etat["modele"]
+        try:
+            if etat["fournisseur"] == fournisseur_tache:
+                resultat = pilote.envoyer(etat["adresse"], msg, modele, etat["niveau"], delai=self._delai_reponse)
+            else:
+                file = self._repartiteur.file(etat["fournisseur"], ONGLET_COWORK)
+                futur = file.soumettre(
+                    lambda p: p.envoyer(etat["adresse"], msg, modele, etat["niveau"], delai=self._delai_reponse)
+                )
+                resultat = futur.result(timeout=(self._delai_reponse or 600.0) + 60.0)
+        except ErreurPilote as e:
+            if self._fournisseurs is not None:
+                self._fournisseurs.etats.noter_erreur(etat["fournisseur"], e)
+            raise
+        if self._fournisseurs is not None:
+            self._fournisseurs.etats.noter_ok(etat["fournisseur"])
+        return resultat
+
+    def _secours_pour(self, fournisseur: str, erreur: ErreurPilote) -> dict | None:
+        """Le fournisseur, le modèle et le niveau du secours, si cette erreur y donne droit."""
+        if self._fournisseurs is None or not erreur.secours:
+            return None
+        secours = self._fournisseurs.secours()
+        if secours is None or secours["fournisseur"] == fournisseur:
+            return None
+        return {"fournisseur": secours["fournisseur"], "modele": secours["modele"],
+                "niveau": NIVEAU_SECOURS if self._fournisseurs.a_des_niveaux(secours["fournisseur"]) else None}
+
+    def _phrase_secours(self, de: str, erreur: Exception, etat: dict) -> str:
+        nom = self._fournisseurs.nom
+        raison = RAISONS_SECOURS.get(classer_erreur(erreur) or "panne", "indisponible")
+        modele = f" · {etat['modele']}" if etat["modele"] and etat["modele"] != MODELE_SITE else ""
+        return f"{nom(de)} {raison} : la tâche continue avec {nom(etat['fournisseur'])}{modele}"
 
     def _preparer(
         self, conversation_id: str, dossier: Path, texte: str, processus: GestionnaireProcessus

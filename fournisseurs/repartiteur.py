@@ -81,16 +81,21 @@ class Repartiteur:
         self._files: dict[tuple[str, str], object] = dict(existantes or {})
         self._verrou = threading.Lock()
 
+    @classmethod
+    def unique(cls, fournisseur: str, role: str, file) -> "Repartiteur":
+        """Une seule file déjà prête (tests, ou une app sans autres fournisseurs)."""
+        return cls({}, set(), {(fournisseur, role): file})
+
     def connait(self, fournisseur: str) -> bool:
-        return fournisseur in self._fabriques
+        return fournisseur in self._fabriques or any(f == fournisseur for f, _ in self._files)
 
     def file(self, fournisseur: str, role: str):
-        if fournisseur not in self._fabriques:
-            raise FournisseurInconnu(fournisseur)
         cle = (fournisseur, TOUS_ROLES if fournisseur in self._paralleles else role)
         with self._verrou:
             file = self._files.get(cle)
             if file is None:
+                if fournisseur not in self._fabriques:
+                    raise FournisseurInconnu(fournisseur)
                 fabrique = self._fabriques[fournisseur]
                 if fournisseur in self._paralleles:
                     file = FileParallele(lambda: fabrique(role), nom=f"api-{fournisseur}")

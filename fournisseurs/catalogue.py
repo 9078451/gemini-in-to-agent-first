@@ -90,6 +90,8 @@ CATALOGUE: dict[str, Fournisseur] = {
 
 # Toujours actif : c'est le fournisseur d'origine d'Agent First.
 PAR_DEFAUT = "gemini"
+# Site sans choix de modèle par Agent First : il garde le sien.
+MODELE_SITE = "Par défaut"
 
 
 def fournisseur(identifiant: str) -> Fournisseur | None:

@@ -78,7 +78,7 @@ def cadre(
         processus=processus or "none",
         derniere_tache=derniere_tache or "none",
         conversation=(
-            f"EARLIER IN THIS CONVERSATION (this is a new Gemini chat; what the user asked before):\n{conversation}\n"
+            f"EARLIER IN THIS CONVERSATION (this is a new chat; what the user asked before):\n{conversation}\n"
             if conversation else ""
         ),
         entete="USER ANSWER TO YOUR QUESTION:" if reponse else "USER REQUEST:",

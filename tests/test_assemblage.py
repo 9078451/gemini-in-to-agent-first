@@ -25,7 +25,7 @@ class FauxPilote:
         self.appele = threading.Event()
         self.envois = []
 
-    def envoyer(self, adresse, texte, modele=None, niveau=None, delai=None):
+    def envoyer(self, adresse, texte, modele=None, niveau=None, delai=None, au_fil=None):
         self.envois.append(texte)
         self.appele.set()
         if self.libere is not None:

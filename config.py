@@ -42,6 +42,8 @@ DOSSIER_DONNEES = RACINE / "donnees"
 DOSSIER_JOURNAUX = RACINE / "journaux"
 FICHIER_HISTORIQUE = DOSSIER_DONNEES / "historique.db"
 FICHIER_CLE_API = DOSSIER_DONNEES / "cle_api.txt"
+FICHIER_FOURNISSEURS = DOSSIER_DONNEES / "fournisseurs.json"  # clés API, modèles affichés, secours
+FICHIER_FILS = DOSSIER_DONNEES / "fils.db"  # conversations avec les fournisseurs par API
 
 # Utilisés tant que la liste n'a pas pu être lue dans Gemini (relevés le 2026-10-15).
 MODELES_PAR_DEFAUT = [

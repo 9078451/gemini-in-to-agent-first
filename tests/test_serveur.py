@@ -202,7 +202,10 @@ def test_delai_depasse(pilote, tmp_path):
 
 
 def test_etat(client):
-    assert client.get("/api/etat").json() == {"agent_first": True, "chrome": True, "google": True}
+    assert client.get("/api/etat").json() == {
+        "agent_first": True, "chrome": True, "google": True,
+        "fournisseurs": {"gemini": {"etat": "inconnu", "detail": None}},
+    }
 
 
 def test_page_web_servie_sans_cache(pilote, tmp_path):

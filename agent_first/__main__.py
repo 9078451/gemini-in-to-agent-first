@@ -11,6 +11,9 @@ from agent_first.dossier import choisir_dossier
 from agent_first.fenetre import ouvrir_quand_pret, repond
 from agent_first.historique import Historique
 from agent_first.openai_compat import adresse_reseau
+from fournisseurs.fabriques import fabriques_api, ids_api
+from fournisseurs.memoire import MemoireFils
+from fournisseurs.reglages import ReglagesFournisseurs
 from pilote.chrome import ONGLET_COWORK, ChromeDedie, OngletGemini
 from pilote.gemini import PiloteGemini, ReglagesCompte
 
@@ -41,11 +44,14 @@ def main() -> None:
             reglages=reglages_compte,
         )
 
+    reglages = ReglagesFournisseurs(config.FICHIER_FOURNISSEURS)
+    memoire = MemoireFils(config.FICHIER_FILS)
     adresse_api = f"http://{adresse_reseau()}:{config.PORT_API}/v1" if config.API_ACTIVE else None
     agent = assembler(
         fabrique_pilote, chrome.est_lance, Historique(config.FICHIER_HISTORIQUE),
         config.FICHIER_CLE_API if config.API_ACTIVE else None,
         adresse_api=adresse_api, choisir_dossier=choisir_dossier,
+        reglages=reglages, fabriques_autres=fabriques_api(reglages, memoire), paralleles=ids_api(),
     )
     serveur_api = None
     if agent.api is not None:

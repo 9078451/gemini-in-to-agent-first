@@ -24,7 +24,8 @@ def masquer(cle: str | None) -> str | None:
 
 
 class ReglagesFournisseurs:
-    def __init__(self, fichier: Path) -> None:
+    def __init__(self, fichier: Path | None) -> None:
+        """`fichier` à None : réglages en mémoire seulement (tests, app sans autres fournisseurs)."""
         self._fichier = fichier
         self._verrou = threading.Lock()
         self._donnees = self._charger()
@@ -98,6 +99,8 @@ class ReglagesFournisseurs:
 
     def _charger(self) -> dict:
         vide = {"fournisseurs": {}, "secours": dict(SECOURS_VIDE)}
+        if self._fichier is None:
+            return vide
         try:
             donnees = json.loads(self._fichier.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -116,6 +119,8 @@ class ReglagesFournisseurs:
 
     def _sauver(self) -> None:
         """Appelé sous le verrou : écrit dans un fichier à part, puis le met à la place."""
+        if self._fichier is None:
+            return
         self._fichier.parent.mkdir(parents=True, exist_ok=True)
         provisoire = self._fichier.with_suffix(".tmp")
         provisoire.write_text(json.dumps(copy.deepcopy(self._donnees), ensure_ascii=False, indent=2), encoding="utf-8")

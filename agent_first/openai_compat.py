@@ -60,9 +60,16 @@ def mettre_a_plat(messages: list[dict]) -> str:
     return "\n\n".join(parties)
 
 
-def nettoyer_reponse(texte: str) -> str:
+DEBUT_GEMINI = re.compile(r"^\s*Gemini a dit\s*\n?")
+
+
+def nettoyer_debut(texte: str) -> str:
     """Le texte lu dans Gemini commence par « Gemini a dit » (titre pour lecteur d'écran)."""
-    return re.sub(r"^\s*Gemini a dit\s*\n?", "", texte, count=1).strip()
+    return DEBUT_GEMINI.sub("", texte, count=1)
+
+
+def nettoyer_reponse(texte: str) -> str:
+    return nettoyer_debut(texte).strip()
 
 
 def estimer_jetons(texte: str) -> int:
@@ -93,13 +100,46 @@ def morceaux(contenu: str, modele: str) -> Iterator[str]:
     yield "data: [DONE]\n\n"
 
 
+def morceaux_en_direct(evenements: Iterator[dict], modele: str) -> Iterator[str]:
+    """La réponse en flux SSE au format OpenAI, pendant qu'elle s'écrit : `evenements` donne
+    des `partiel` (texte complet à ce moment), puis `message` ou `erreur`. Chaque morceau
+    envoyé est la suite du texte déjà envoyé."""
+    base = {"id": f"chatcmpl-{uuid.uuid4().hex[:24]}", "object": "chat.completion.chunk",
+            "created": int(time.time()), "model": modele}
+
+    def morceau(delta: dict, fin: str | None = None) -> str:
+        choix = {"index": 0, "delta": delta, "finish_reason": fin}
+        return f"data: {json.dumps({**base, 'choices': [choix]}, ensure_ascii=False)}\n\n"
+
+    yield morceau({"role": "assistant", "content": ""})
+    envoye = ""
+    for evenement in evenements:
+        if evenement["type"] == "partiel":
+            texte = nettoyer_debut(evenement["texte"])
+        elif evenement["type"] == "message":
+            texte = evenement["message"]["texte"]
+        else:
+            erreur = {"message": evenement.get("erreur", "error"), "type": "upstream_error",
+                      "code": evenement.get("code", 502)}
+            yield f"data: {json.dumps({'error': erreur}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+        if texte.startswith(envoye) and len(texte) > len(envoye):
+            yield morceau({"content": texte[len(envoye):]})
+            envoye = texte
+        if evenement["type"] == "message":
+            yield morceau({}, "stop")
+            yield "data: [DONE]\n\n"
+            return
+
+
 # Les étapes Cowork sont gardées en français ; l'API réseau les présente en anglais.
 TYPES = {
     "plan": "plan", "action": "action", "resultat": "result", "saute": "skipped",
     "demande": "approval_required", "autorise": "auto_approved", "refus": "refused",
     "erreur_format": "format_error", "erreur_gemini": "gemini_error", "relance_fin": "done_refused",
     "termine": "done", "question": "question", "limite": "limit_reached", "arret": "stopped",
-    "erreur": "error", "statut": "status", "processus": "processes", "tour": "round", "relais": "new_gemini_chat",
+    "erreur": "error", "statut": "status", "processus": "processes", "tour": "round", "relais": "new_gemini_chat", "secours": "fallback",
 }
 CLES = {
     "etape": "step", "champs": "fields", "corps": "output", "raison": "reason", "resume": "summary",
