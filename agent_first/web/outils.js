@@ -50,10 +50,17 @@ export function titreDepuis(texte) {
   return titre.length <= LONGUEUR_TITRE ? titre : `${titre.slice(0, LONGUEUR_TITRE - 1)}…`;
 }
 
-export function metaMessage(message) {
+// Noms affichés des fournisseurs connus d'avance ; les autres viennent d'Agent First (`noms`).
+const NOMS = { gemini: "Gemini", chatgpt: "ChatGPT", claude_web: "Claude.ai", anthropic: "Claude", ollama: "Ollama" };
+
+export function nomFournisseur(id, noms = {}) {
+  return noms[id] ?? NOMS[id] ?? id ?? "Gemini";
+}
+
+export function metaMessage(message, noms = {}) {
   return [
-    "Gemini",
-    message.modele,
+    nomFournisseur(message.fournisseur ?? "gemini", noms),
+    message.modele && message.modele !== "Par défaut" ? message.modele : null,
     message.niveau && `réflexion ${message.niveau}`,
     message.duree != null && formaterDuree(message.duree),
     detailsMessage(message).interrompue && "interrompue",
@@ -101,4 +108,41 @@ export function detailsMessage(message) {
   } catch {
     return {};
   }
+}
+
+// « secours · Gemini à sa limite » : la réponse vient du fournisseur de secours.
+const RAISONS = { limite: "à sa limite", deconnecte: "déconnecté", panne: "en panne" };
+
+export function texteSecours(message, noms = {}) {
+  const secours = detailsMessage(message).secours;
+  if (!secours) return null;
+  return `secours · ${nomFournisseur(secours.de, noms)} ${RAISONS[secours.raison] ?? "indisponible"}`;
+}
+
+// État d'un fournisseur, en clair (rien quand il est inconnu ou prêt : le point suffit).
+export function libelleEtat(etat, detail) {
+  if (etat === "limite") return detail ? `limite · ${detail}` : "limite";
+  if (etat === "deconnecte") return "déconnecté";
+  if (etat === "panne") return "en panne";
+  return "";
+}
+
+// Le réglage à utiliser parmi les fournisseurs actifs : le préféré s'il existe encore
+// (fournisseur, puis modèle et niveau libres), sinon le premier fournisseur et son choix actif.
+export function choixValide(fournisseurs, prefere = {}) {
+  const f = fournisseurs.find((x) => x.id === prefere.fournisseur) ?? fournisseurs[0];
+  if (!f) return { fournisseur: null, modele: null, niveau: null };
+  const memeFournisseur = f.id === prefere.fournisseur;
+  return {
+    fournisseur: f.id,
+    modele: f.modeles.length ? choixDisponible(f.modeles, memeFournisseur ? prefere.modele : null) : null,
+    niveau: f.niveaux.length ? choixDisponible(f.niveaux, prefere.niveau) : null,
+  };
+}
+
+// Palette Ctrl K : les actions puis les conversations dont le titre contient le texte cherché.
+export function filtrerPalette(actions, conversations, texte) {
+  const motif = texte.trim().toLowerCase();
+  const garde = (t) => !motif || t.toLowerCase().includes(motif);
+  return [...actions.filter((a) => garde(a.titre)), ...conversations.filter((c) => garde(c.titre || ""))];
 }

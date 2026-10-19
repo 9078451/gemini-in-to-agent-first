@@ -65,9 +65,9 @@ export function libelleEtape(ev) {
   return { icone: autre.icone, verbe: ev.type, titre: autre.titre, detail: ev.raison ?? ev.resume ?? ev.question ?? ev.corps ?? "" };
 }
 
-// Une réponse de Gemini, avec son temps : on voit où part le temps d'une tâche.
-export function detailTour(ev) {
-  return `Gemini a répondu en ${secondes(ev.gemini)}`;
+// Une réponse du modèle, avec son temps : on voit où part le temps d'une tâche.
+export function detailTour(ev, nom = "Gemini") {
+  return `${nom} a répondu en ${secondes(ev.gemini)}`;
 }
 
 function secondes(valeur) {

@@ -1,212 +1,199 @@
-// agent.first — état, affichage et événements de l'app.
+// agent.first — l'app : barre latérale, discussion (Chat et Cowork), tableau de bord.
 import { appeler, appelerFlux } from "./api.js";
-import { cheminCourt, choixDisponible, detailsMessage, formaterDate, formaterDuree, groupesParDate, limiteOption, metaMessage, titreDepuis } from "./outils.js";
-import { avancementPlan, detailTour, infoResultat, libelleEtape, lignesBilan, nombreLignes, normaliserAction, resumeDiff } from "./outils_cowork.js";
+import { $, boutonIcone, ecrire, element, icone, lire, notifier } from "./dom.js";
+import { etat, fournisseur, nom } from "./etat.js";
+import { brancherDefilement, bulle, bulleAttente, bulleEnEcriture, defilerEnBas, estEnBas } from "./fil.js";
+import { brancherMenus, dessinerMenus, fermerMenus, menusOuverts } from "./menus.js";
+import { cheminCourt, choixValide, formaterDate, formaterDuree, groupesParDate, libelleEtat, titreDepuis } from "./outils.js";
+import { libelleEtape } from "./outils_cowork.js";
+import { brancherPalette, ouvrirPalette } from "./palette.js";
+import { brancherParametres, choixParDefaut, ouvrirParametres } from "./parametres.js";
+import { creerRenduCowork, FIN_DE_TACHE } from "./rendu_cowork.js";
 
-const $ = (id) => document.getElementById(id);
-const CLE_DEFAUT = "agent.first.defaut";
 const CLE_BARRE = "agent.first.barre-repliee";
 const CLE_DOSSIER = "agent.first.dossier";
-const FIN_DE_TACHE = ["termine", "limite", "arret", "erreur", "question"];
-const VERT = "var(--vert)";
-const ORANGE = "var(--ambre)";
-const ROUGE = "var(--rouge)";
-const GRIS = "var(--texte-3)";
-const ETATS_GOOGLE = {
-  true: ["connecté", VERT],
-  false: ["non connecté", ROUGE],
-  null: ["à vérifier", GRIS],
-};
+const AIDE = "Entrée pour envoyer · Maj+Entrée pour aller à la ligne";
 
-const etat = {
-  modes: { modeles: [], niveaux: [] },
-  modele: null,
-  niveau: null,
-  courante: null, // identifiant de la conversation affichée ; null = nouvelle conversation
-  occupe: false,
-  periode: "7j",
-  serveur: null, // dernière réponse de /api/etat (null = Agent First injoignable)
-  mode: "chat", // « chat » ou « cowork »
-  dossier: null, // dossier de travail (mode Cowork)
-  tache: null, // conversation dont une tâche Cowork est suivie en direct
-  flux: null, // EventSource de cette tâche
-  actives: new Set(), // conversations dont une tâche tourne (app ou API réseau)
-  attentes: new Set(), // conversations dont une tâche attend un accord
-};
+// ---------- statut (sous la zone de saisie) ----------
 
-// ---------- outils ----------
-
-function element(balise, classe, texte) {
-  const e = document.createElement(balise);
-  if (classe) e.className = classe;
-  if (texte !== undefined) e.textContent = texte;
-  return e;
-}
-
-function icone(nom) {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
-  use.setAttribute("href", `#${nom}`);
-  svg.append(use);
-  return svg;
-}
-
-function lire(cle, defaut) {
-  try {
-    return JSON.parse(localStorage.getItem(cle)) ?? defaut;
-  } catch {
-    return defaut;
+function statut(texte, genre = "") {
+  const pied = $("pied");
+  if (!texte) {
+    pied.replaceChildren(element("span", "pied-aide", AIDE));
+    return;
   }
+  pied.replaceChildren(element("span", `point ${genre}`), element("span", "statut", texte));
 }
 
-function ecrire(cle, valeur) {
-  try {
-    localStorage.setItem(cle, JSON.stringify(valeur));
-  } catch {
-    // stockage indisponible : la préférence ne sera simplement pas gardée
-  }
+function occuper(occupe, reponse = false) {
+  etat.occupe = occupe;
+  etat.reponseEnCours = occupe && reponse;
+  $("envoyer").hidden = occupe;
+  $("arreter").hidden = !occupe;
+  if (!occupe) statut(null);
 }
 
-function signaler(texte, couleur) {
-  $("pastille-texte").textContent = texte;
-  $("pastille-point").style.background = couleur;
-}
-
-function afficherVue(nom) {
-  $("vue-accueil").hidden = nom !== "accueil";
-  $("vue-discussion").hidden = nom !== "discussion";
-  $("aller-accueil").classList.toggle("actif", nom === "accueil");
-}
-
-function defilerEnBas() {
-  const fil = $("fil");
-  fil.scrollTop = fil.scrollHeight;
+function afficherVue(vue) {
+  $("vue-accueil").hidden = vue !== "accueil";
+  $("vue-discussion").hidden = vue !== "discussion";
+  $("aller-accueil").classList.toggle("actif", vue === "accueil");
 }
 
 function ajusterSaisie() {
   const saisie = $("saisie");
   saisie.style.height = "auto";
-  saisie.style.height = `${Math.min(saisie.scrollHeight, 220)}px`;
+  saisie.style.height = `${Math.min(saisie.scrollHeight, 240)}px`;
 }
 
-// ---------- état d'Agent First et de Gemini ----------
+// ---------- fournisseurs et état ----------
+
+async function chargerFournisseurs() {
+  try {
+    const r = await appeler("GET", "/api/fournisseurs");
+    etat.fournisseurs = r.actifs;
+    etat.tous = r.tous;
+    etat.secours = r.secours;
+  } catch {
+    // Agent First injoignable : la barre le dit (verifierEtat)
+  }
+  etat.choix = choixValide(etat.fournisseurs, etat.choix);
+  dessinerMenus();
+  dessinerEtatsFournisseurs();
+}
+
+function dessinerEtatsFournisseurs() {
+  const zone = $("etats-fournisseurs");
+  if (!etat.serveur) {
+    const ligne = element("div", "etat-fournisseur");
+    ligne.append(element("span", "point panne"), element("span", "nom", "Agent First arrêté"));
+    zone.replaceChildren(ligne);
+    return;
+  }
+  zone.replaceChildren(...etat.fournisseurs.map((f) => {
+    const ligne = element("button", "etat-fournisseur");
+    ligne.type = "button";
+    const detail = libelleEtat(f.etat, f.detail);
+    ligne.title = `${f.nom}${detail ? ` : ${detail}` : f.etat === "pret" ? " : prêt" : ""}`;
+    ligne.append(element("span", `point ${f.etat}`), element("span", "nom", f.nom));
+    // Le point dit déjà « limite » : ici, seulement jusqu'à quand.
+    const court = f.etat === "limite" && f.detail ? f.detail : detail;
+    if (court) ligne.append(element("span", `detail ${f.etat}`, court));
+    ligne.addEventListener("click", () => ouvrirParametres("fournisseurs", f.id));
+    return ligne;
+  }));
+}
 
 async function verifierEtat() {
   try {
     etat.serveur = await appeler("GET", "/api/etat");
-    const [texte, couleur] = ETATS_GOOGLE[String(etat.serveur.google)];
-    $("etat-google").textContent = `Gemini · ${texte}`;
-    $("point-google").style.background = couleur;
-    if (!etat.occupe) signaler("Gemini prêt", VERT);
+    for (const f of etat.fournisseurs) Object.assign(f, etat.serveur.fournisseurs?.[f.id] ?? {});
+    if (etat.serveur.google === false) {
+      const gemini = fournisseur("gemini");
+      if (gemini) Object.assign(gemini, { etat: "deconnecte", detail: null });
+    }
   } catch {
     etat.serveur = null;
-    $("etat-google").textContent = "Agent First arrêté";
-    $("point-google").style.background = ROUGE;
-    if (!etat.occupe) signaler("Agent First arrêté", ROUGE);
   }
-}
-
-// ---------- modèle et niveau ----------
-
-async function chargerModes() {
-  try {
-    etat.modes = await appeler("GET", "/api/modeles");
-  } catch (e) {
-    signaler(e.message, ROUGE);
-  }
-  choisirReglages(etat.modele, etat.niveau);
-}
-
-function choisirReglages(modele, niveau) {
-  const { modeles, niveaux } = etat.modes;
-  // un choix bloqué par la limite du compte est remplacé par un choix disponible
-  etat.modele = choixDisponible(modeles, modele);
-  etat.niveau = choixDisponible(niveaux, niveau);
-  dessinerReglages();
-}
-
-function optionsMenu(liste, choisi, choisir) {
-  return liste.map((o) => {
-    const option = element("button", "option");
-    option.type = "button";
-    option.setAttribute("role", "option");
-    option.setAttribute("aria-selected", String(o.nom === choisi));
-    option.append(element("span", "option-nom", o.nom), element("span", "option-desc", o.description));
-    const limite = limiteOption(o);
-    if (limite) {
-      option.classList.add("bloquee"); // Gemini refusera ce choix jusqu'à la réinitialisation
-      option.title = `Bloqué par la limite de ton compte Gemini jusqu'au ${limite}`;
-    }
-    option.addEventListener("click", () => {
-      choisir(o.nom);
-      fermerMenus();
-      dessinerReglages();
-    });
-    return option;
-  });
-}
-
-function dessinerReglages() {
-  $("nom-modele").textContent = etat.modele ?? "Modèle";
-  $("nom-niveau").textContent = etat.niveau ? `Réflexion ${etat.niveau}` : "Réflexion";
-  $("menu-modeles").replaceChildren(...optionsMenu(etat.modes.modeles, etat.modele, (nom) => (etat.modele = nom)));
-  $("menu-niveaux").replaceChildren(...optionsMenu(etat.modes.niveaux, etat.niveau, (nom) => (etat.niveau = nom)));
-  $("bouton-niveau").parentElement.hidden = !etat.modes.niveaux.length;
-}
-
-// bouton → menu qu'il ouvre, au-dessus de la zone de saisie
-const MENUS = { "bouton-modele": "menu-modeles", "bouton-niveau": "menu-niveaux" };
-
-function basculerMenu(bouton) {
-  const ouvrir = $(MENUS[bouton]).hidden;
-  fermerMenus();
-  $(MENUS[bouton]).hidden = !ouvrir;
-  $(bouton).setAttribute("aria-expanded", String(ouvrir));
-}
-
-function fermerMenus() {
-  for (const [bouton, menu] of Object.entries(MENUS)) {
-    $(menu).hidden = true;
-    $(bouton).setAttribute("aria-expanded", "false");
-  }
+  dessinerEtatsFournisseurs();
+  dessinerMenus();
 }
 
 // ---------- barre latérale ----------
 
 async function chargerConversations() {
-  const recherche = $("recherche").value.trim();
   const liste = $("liste-conversations");
   let conversations;
   try {
-    conversations = await appeler("GET", `/api/conversations?${new URLSearchParams({ recherche })}`);
+    conversations = await appeler("GET", "/api/conversations");
   } catch {
     liste.replaceChildren(element("p", "vide", "Historique indisponible."));
     return;
   }
   if (!conversations.length) {
-    liste.replaceChildren(element("p", "vide", recherche ? "Aucun résultat." : "Tes conversations apparaîtront ici."));
+    liste.replaceChildren(element("p", "vide", "Tes conversations apparaîtront ici."));
     return;
   }
   const contenu = [];
   for (const groupe of groupesParDate(conversations)) {
     contenu.push(element("div", "groupe-titre", groupe.titre));
-    for (const c of groupe.conversations) {
-      const bouton = element("button", "conversation");
-      bouton.type = "button";
-      bouton.title = [c.mode === "cowork" ? "Cowork" : null, c.source === "api" ? "API" : null, c.titre].filter(Boolean).join(" · ");
-      bouton.classList.toggle("actif", c.id === etat.courante);
-      // marque : point ambre si une tâche attend un accord, point qui pulse si elle tourne,
-      // sinon terminal pour Cowork, rien pour Chat
-      const marque = element("span", "marque");
-      if (etat.attentes.has(c.id)) marque.classList.add("attente");
-      else if (c.id === etat.tache || etat.actives.has(c.id)) marque.classList.add("en-cours");
-      else if (c.mode === "cowork") marque.append(icone("i-terminal"));
-      bouton.append(marque, element("span", "conversation-titre", c.titre || "Sans titre"));
-      bouton.addEventListener("click", () => ouvrirConversation(c.id));
-      contenu.push(bouton);
-    }
+    for (const c of groupe.conversations) contenu.push(ligneConversation(c));
   }
   liste.replaceChildren(...contenu);
+}
+
+function ligneConversation(c) {
+  const ligne = element("div", "conversation");
+  ligne.tabIndex = 0;
+  ligne.setAttribute("role", "button");
+  ligne.title = [c.mode === "cowork" ? "Cowork" : null, nom(c.fournisseur), c.source === "api" ? "API" : null, c.titre].filter(Boolean).join(" · ");
+  ligne.classList.toggle("actif", c.id === etat.courante);
+  // marque : point ambre si une tâche attend un accord, point qui pulse si elle tourne,
+  // sinon terminal pour Cowork, rien pour Chat
+  const marque = element("span", "marque");
+  if (etat.attentes.has(c.id)) marque.classList.add("attente");
+  else if (c.id === etat.tache || etat.actives.has(c.id)) marque.classList.add("en-cours");
+  else if (c.mode === "cowork") marque.append(icone("i-terminal"));
+  const titre = element("span", "conversation-titre", c.titre || "Sans titre");
+  const actions = element("span", "conversation-actions");
+  actions.append(
+    boutonIcone("i-crayon", "Renommer", () => renommer(c, titre)),
+    boutonIcone("i-corbeille", "Retirer de l'historique", () => supprimerConversation(c)),
+  );
+  ligne.append(marque, titre, actions);
+  ligne.addEventListener("click", () => ouvrirConversation(c.id));
+  ligne.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target === ligne) ouvrirConversation(c.id);
+  });
+  return ligne;
+}
+
+// Titre modifié sur place : Entrée garde, Échap annule.
+function editerTitre(porteur, actuel, enregistrer) {
+  const champ = element("input");
+  champ.value = actuel;
+  porteur.replaceChildren(champ);
+  champ.focus();
+  champ.select();
+  let fini = false;
+  const finir = async (garder) => {
+    if (fini) return;
+    fini = true;
+    const nouveau = champ.value.trim();
+    porteur.textContent = garder && nouveau ? nouveau : actuel;
+    if (garder && nouveau && nouveau !== actuel) await enregistrer(nouveau);
+  };
+  champ.addEventListener("click", (e) => e.stopPropagation());
+  champ.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") finir(true);
+    if (e.key === "Escape") finir(false);
+  });
+  champ.addEventListener("blur", () => finir(true));
+}
+
+function renommer(c, porteur) {
+  editerTitre(porteur, c.titre || "Sans titre", async (titre) => {
+    try {
+      await appeler("PATCH", `/api/conversations/${c.id}`, { titre });
+      if (etat.courante === c.id) $("titre-conversation").textContent = titre;
+      chargerConversations();
+    } catch (e) {
+      notifier(e.message, "erreur");
+    }
+  });
+}
+
+async function supprimerConversation(c) {
+  if (!confirm(`Retirer « ${c.titre || "Sans titre"} » de l'historique de l'app ?\nElle reste chez le fournisseur (Gemini…).`)) return;
+  try {
+    await appeler("DELETE", `/api/conversations/${c.id}`);
+    if (etat.courante === c.id) nouvelleConversation();
+    notifier("Conversation retirée", "ok");
+    chargerConversations();
+    if (!$("vue-accueil").hidden) chargerAccueil();
+  } catch (e) {
+    notifier(e.message, "erreur");
+  }
 }
 
 function basculerBarre() {
@@ -215,79 +202,46 @@ function basculerBarre() {
 
 // ---------- discussion ----------
 
-function bulle(message) {
-  if (message.role === "toi") {
-    const b = element("div", "bulle toi");
-    b.append(element("div", "texte-toi", message.texte));
-    return b;
-  }
-  if (message.role === "erreur") {
-    return element("div", "bulle erreur", `Erreur : ${message.texte}`);
-  }
-  // Réponse de Gemini : du texte, sans carte ; le modèle et la durée en dessous, en petit.
-  const carte = element("article", "bulle gemini");
-  const contenu = element("div", "markdown");
-  if (message.html) {
-    contenu.innerHTML = message.html; // déjà nettoyé par Agent First (nh3)
-  } else {
-    contenu.textContent = message.texte;
-  }
-  const copier = element("button", "icone");
-  copier.type = "button";
-  copier.title = "Copier la réponse";
-  copier.setAttribute("aria-label", "Copier la réponse");
-  copier.append(icone("i-copier"));
-  copier.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(message.texte);
-      signaler("Réponse copiée", VERT);
-    } catch {
-      signaler("Copie impossible", ROUGE);
-    }
-  });
-  const pied = element("div", "message-pied");
-  pied.append(element("span", null, metaMessage(message)), copier);
-  carte.append(contenu, pied);
-  return carte;
-}
-
 function accueilDiscussion() {
   const bloc = element("div", "vide-discussion");
+  const f = fournisseur(etat.choix.fournisseur);
+  const pilule = element("div", "vide-fournisseur");
+  pilule.append(element("span", `point ${f?.etat ?? ""}`), element("span", null, f ? `${f.nom}${etat.choix.modele && etat.choix.modele !== "Par défaut" ? ` · ${etat.choix.modele}` : ""}` : "Aucun fournisseur"));
   if (etat.mode === "cowork") {
-    bloc.append(element("h1", null, "Travaille avec Gemini sur ton PC"));
+    bloc.append(element("h1", null, "Travaille sur ton PC"));
     const aide = element("p");
     if (etat.dossier) {
       aide.append(
-        document.createTextNode("Gemini fait un plan, lit, crée et modifie des fichiers, lance des commandes et des serveurs dans "),
+        "L'IA fait un plan, lit, crée et modifie des fichiers, lance des commandes et des serveurs dans ",
         element("code", null, cheminCourt(etat.dossier)),
-        document.createTextNode(", puis vérifie son travail. Les actions risquées attendent ton accord."),
+        ", puis vérifie son travail. Les actions risquées attendent ton accord.",
       );
-      bloc.append(aide);
+      bloc.append(aide, pilule);
     } else {
       aide.textContent = "Choisis d'abord le dossier de travail, puis décris la tâche.";
       const choisir = element("button", "bouton-secondaire", "Choisir un dossier");
       choisir.type = "button";
+      choisir.prepend(icone("i-dossier"));
       choisir.addEventListener("click", choisirDossier);
       bloc.append(aide, choisir);
     }
     return bloc;
   }
-  bloc.append(
-    element("h1", null, "Discute avec Gemini"),
-    element("p", null, "Choisis le modèle et le niveau de réflexion sous la zone de saisie, puis pose ta question."),
-  );
+  bloc.append(element("h1", null, "Nouvelle conversation"), element("p", null, "Choisis le fournisseur et le modèle sous la zone de saisie, puis pose ta question."), pilule);
   return bloc;
 }
 
 function nouvelleConversation() {
   etat.courante = null;
+  etat.conversation = null;
   if (etat.mode === "cowork") etat.dossier = lire(CLE_DOSSIER, null);
   $("titre-conversation").textContent = "Nouvelle conversation";
-  const defaut = lire(CLE_DEFAUT, {});
-  choisirReglages(defaut.modele, defaut.niveau);
+  etat.choix = choixParDefaut();
+  dessinerMenus();
   dessinerMode();
   dessinerProcessus([]);
   $("fil").replaceChildren(accueilDiscussion());
+  defilerEnBas(true);
   afficherVue("discussion");
   chargerConversations();
   $("saisie").focus();
@@ -296,15 +250,22 @@ function nouvelleConversation() {
 async function ouvrirConversation(identifiant) {
   try {
     const { conversation, messages, tache } = await appeler("GET", `/api/conversations/${identifiant}`);
+    if (etat.flux && etat.tache !== conversation.id) {
+      etat.flux.close(); // la tâche suivie continue sur Agent First ; on la retrouvera en revenant
+      etat.flux = null;
+      etat.tache = null;
+    }
     etat.courante = conversation.id;
+    etat.conversation = conversation;
     etat.mode = conversation.mode ?? "chat";
     etat.dossier = conversation.dossier ?? null;
     $("titre-conversation").textContent = conversation.titre || "Conversation";
-    choisirReglages(conversation.modele, conversation.niveau);
+    etat.choix = choixValide(etat.fournisseurs, { fournisseur: conversation.fournisseur, modele: conversation.modele, niveau: conversation.niveau });
+    dessinerMenus();
     dessinerMode();
     const fil = $("fil");
     fil.replaceChildren();
-    const ajouter = creerRenduCowork(fil, false);
+    const ajouter = creerRenduCowork(fil, false, dessinerProcessus);
     // Tâche en cours : ses étapes viendront du flux (rejouées, accord compris) ; ici, seulement ce qui précède.
     const fin = tache?.en_cours ? messages.map((m) => m.role).lastIndexOf("toi") + 1 : messages.length;
     for (const m of messages.slice(0, fin)) {
@@ -312,401 +273,128 @@ async function ouvrirConversation(identifiant) {
       else fil.append(bulle(m));
     }
     afficherVue("discussion");
-    defilerEnBas();
+    defilerEnBas(true);
     dessinerProcessus([]);
     if (etat.mode === "cowork") chargerProcessus(conversation.id);
     if (tache?.en_cours) ecouterFlux(conversation.id, 0);
-    else chargerConversations();
+    else {
+      occuper(false);
+      chargerConversations();
+    }
     dessinerBandeau();
     $("saisie").focus();
   } catch (e) {
-    signaler(e.message, ROUGE);
+    notifier(e.message, "erreur");
   }
 }
 
-async function envoyer() {
+function envoyer() {
   const texte = $("saisie").value.trim();
   if (!texte || etat.occupe) return;
+  if (!etat.choix.fournisseur) {
+    notifier("Aucun fournisseur actif : ouvre Paramètres → Fournisseurs", "attention");
+    return;
+  }
   if (etat.mode === "cowork") return envoyerCowork(texte);
-  etat.occupe = true;
-  $("form-saisie").classList.add("occupe");
+  return envoyerChat(texte);
+}
+
+async function creerConversation(extra = {}) {
+  const { fournisseur: f, modele, niveau } = etat.choix;
+  const conversation = await appeler("POST", "/api/conversations", { fournisseur: f, modele, niveau, ...extra });
+  etat.courante = conversation.id;
+  etat.conversation = conversation;
+}
+
+async function envoyerChat(texte) {
+  occuper(true, true);
   $("saisie").value = "";
   ajusterSaisie();
-
   const fil = $("fil");
   fil.querySelector(".vide-discussion")?.remove();
   fil.append(bulle({ role: "toi", texte }));
-  const attente = element("div", "bulle attente");
-  const libelle = element("span", null, "Gemini réfléchit…");
-  attente.append(element("span", "points"), libelle);
+  const nomF = nom(etat.choix.fournisseur);
+  const { attente, libelle } = bulleAttente(`${nomF} réfléchit…`);
   fil.append(attente);
-  defilerEnBas();
+  defilerEnBas(true);
   if (!etat.courante) $("titre-conversation").textContent = titreDepuis(texte);
 
   const debut = Date.now();
   let ecrit = false; // le premier morceau de réponse est arrivé
-  signaler("Gemini réfléchit…", ORANGE);
-  const minuteur = setInterval(() => {
-    const ecoule = `${ecrit ? "Gemini écrit…" : "Gemini réfléchit…"} ${formaterDuree((Date.now() - debut) / 1000)}`;
+  const tic = () => {
+    const ecoule = `${nomF} ${ecrit ? "écrit" : "réfléchit"}… ${formaterDuree((Date.now() - debut) / 1000)}`;
     libelle.textContent = ecoule;
-    signaler(ecoule, ORANGE);
-  }, 1000);
-
-  // Réponse en cours d'écriture : le même contenu que la réponse finale, avec un curseur.
-  const enCours = element("article", "bulle gemini en-ecriture");
-  const contenu = element("div", "markdown");
-  enCours.append(contenu);
-  $("arreter").hidden = false;
-  etat.reponseEnCours = true;
+    statut(ecoule, "en-cours");
+  };
+  tic();
+  const minuteur = setInterval(tic, 1000);
+  const enCours = bulleEnEcriture();
 
   try {
-    if (!etat.courante) {
-      const conversation = await appeler("POST", "/api/conversations", { modele: etat.modele, niveau: etat.niveau });
-      etat.courante = conversation.id;
-    }
+    if (!etat.courante) await creerConversation();
     let fin = null;
-    await appelerFlux(`/api/conversations/${etat.courante}/messages?flux=1`, { texte, modele: etat.modele, niveau: etat.niveau }, (ev) => {
+    const { fournisseur: f, modele, niveau } = etat.choix;
+    await appelerFlux(`/api/conversations/${etat.courante}/messages?flux=1`, { texte, fournisseur: f, modele, niveau }, (ev) => {
       if (ev.type === "partiel") {
-        const enBas = estEnBas();
-        if (!ecrit) attente.replaceWith(enCours);
+        const suivre = estEnBas(); // avant d'ajouter du texte : après, on ne serait plus « en bas »
+        if (!ecrit) attente.replaceWith(enCours.carte);
         ecrit = true;
-        if (ev.html) contenu.innerHTML = ev.html; // nettoyé par Agent First (nh3)
-        else contenu.textContent = ev.texte;
-        if (enBas) defilerEnBas();
+        enCours.afficher(ev.texte, ev.html);
+        defilerEnBas(suivre);
       } else fin = ev;
     });
     if (!fin) throw new Error("Réponse incomplète : Agent First s'est peut-être arrêté.");
     if (fin.type === "erreur") throw new Error(fin.erreur);
-    (ecrit ? enCours : attente).replaceWith(bulle(fin.message));
-    signaler(detailsMessage(fin.message).interrompue ? "Réponse interrompue" : "Gemini prêt", VERT);
-    verifierEtat(); // Chrome et Google viennent de servir : l'état affiché se met à jour
+    (ecrit ? enCours.carte : attente).replaceWith(bulle(fin.message));
+    if (fin.message.fournisseur && fin.message.fournisseur !== etat.choix.fournisseur) {
+      notifier(`Réponse du secours : ${nom(fin.message.fournisseur)}`, "attention", 5000);
+    }
+    const conv = await appeler("GET", `/api/conversations/${etat.courante}`).catch(() => null);
+    if (conv) {
+      etat.conversation = conv.conversation; // après un secours, la conversation continue chez lui
+      etat.choix = choixValide(etat.fournisseurs, { fournisseur: conv.conversation.fournisseur, modele: conv.conversation.modele, niveau: conv.conversation.niveau ?? etat.choix.niveau });
+    }
   } catch (e) {
-    (ecrit ? enCours : attente).replaceWith(bulle({ role: "erreur", texte: e.message }));
+    (ecrit ? enCours.carte : attente).replaceWith(bulle({ role: "erreur", texte: e.message }, () => {
+      $("saisie").value = texte;
+      envoyer();
+    }));
     $("saisie").value = texte; // pour pouvoir le renvoyer
     ajusterSaisie();
-    signaler(e.message === "Agent First n'est pas démarré." ? "Agent First arrêté" : "Erreur", ROUGE);
-    verifierEtat(); // met à jour l'état du compte (la pastille garde l'erreur tant que l'envoi est en cours)
-    if (/n'est pas proposé|est bloqué/.test(e.message)) chargerModes(); // menus à jour (choix bloqués)
   } finally {
     clearInterval(minuteur);
-    etat.occupe = false;
-    etat.reponseEnCours = false;
-    $("arreter").hidden = true;
-    $("form-saisie").classList.remove("occupe");
+    occuper(false);
     defilerEnBas();
     chargerConversations();
+    await chargerFournisseurs(); // états à jour (limite, secours…)
   }
-}
-
-function estEnBas() {
-  const fil = $("fil");
-  return fil.scrollHeight - fil.scrollTop - fil.clientHeight < 40;
 }
 
 // ---------- Cowork ----------
 
-// Une étape = une ligne monospace : point d'état, verbe (Write, Edit, Run…), détail, info, et un
-// contenu qu'on peut déplier (diff, sortie de commande, fichier écrit).
-function ligneEtape(ev, interactif) {
-  const { verbe, detail } = libelleEtape(ev);
-  const { action, champs } = normaliserAction(ev);
-  const etape = element("details", "etape");
-  etape.dataset.action = action;
-  etape.dataset.detail = detail;
-  const resume = element("summary");
-  resume.title = detail;
-  const chevron = icone("i-chevron");
-  chevron.classList.add("chevron");
-  resume.append(
-    element("span", interactif ? "point-etat attente" : "point-etat"),
-    element("span", "etape-verbe", verbe),
-    element("span", "etape-detail", detail),
-    element("span", "etape-info"),
-    chevron,
-  );
-  etape.append(resume);
-  if (action === "create") {
-    resume.querySelector(".etape-info").textContent = nombreLignes(champs.content);
-    if (champs.content) ajouterCorps(etape, champs.content, false);
-  }
-  return etape;
-}
-
-// Action non exécutée parce qu'une action précédente du même message a échoué.
-function ligneSautee(ev) {
-  const { verbe, detail } = libelleEtape(ev);
-  const ligne = element("div", "etape sautee");
-  ligne.title = "Non exécutée : une action précédente du même message a échoué";
-  ligne.append(element("span", "point-etat"), element("span", "etape-verbe", verbe), element("span", "etape-detail", detail), element("span", "etape-info", "sautée"));
-  return ligne;
-}
-
-function ajouterCorps(etape, texte, ouvert) {
-  etape.querySelector(".etape-corps")?.remove();
-  const corps = element("div", "etape-corps", texte);
-  etape.append(corps);
-  etape.classList.add("a-corps");
-  etape.open = ouvert;
-  return corps;
-}
-
-function marquerEtape(etape, etatPoint) {
-  etape.querySelector(".point-etat").className = `point-etat ${etatPoint}`;
-}
-
-function afficherDiff(corps, diff) {
-  for (const ligne of diff.split("\n")) {
-    const classe = ligne.startsWith("@@") ? "repere" : ligne.startsWith("+") ? "plus" : ligne.startsWith("-") ? "moins" : "contexte";
-    corps.append(element("div", classe, ligne));
-  }
-}
-
-function ajouterResultat(etape, ev) {
-  marquerEtape(etape, ev.ok ? "ok" : "ko");
-  const info = etape.querySelector(".etape-info");
-  const action = etape.dataset.action;
-  if (ev.diff) {
-    const { plus, moins } = resumeDiff(ev.diff);
-    info.replaceChildren(element("span", "plus", `+${plus}`), document.createTextNode(" "), element("span", "moins", `−${moins}`));
-    afficherDiff(ajouterCorps(etape, "", action === "edit"), ev.diff); // une réécriture complète reste repliée
-  } else if (!ev.ok) {
-    info.textContent = ev.code ? `code ${ev.code}` : infoResultat(action, ev.corps) || "échec";
-    ajouterCorps(etape, ev.corps, true);
-  } else if (["run", "read", "search", "list", "visit", "start", "logs", "stop"].includes(action)) {
-    info.textContent = infoResultat(action, ev.corps);
-    ajouterCorps(etape, ev.corps, false);
-  }
-}
-
-// Évènement sans action (refus, autorisation d'office, limite, arrêt…) : une ligne de texte discrète.
-function noteEtape(ev, etatPoint) {
-  const { titre, detail } = libelleEtape(ev);
-  const note = element("div", "etape-note");
-  note.append(element("span", `point-etat ${etatPoint}`), element("span", null, titre));
-  if (detail) {
-    note.append(element("span", "etape-detail", detail));
-    note.title = detail;
-  }
-  return note;
-}
-
-// Réponse hors format : repliée, avec ce que Gemini a écrit (pour comprendre ce qui s'est passé).
-function noteFormat(ev) {
-  const bloc = element("details", "format-casse");
-  const resume = element("summary");
-  resume.append(element("span", "point-etat decision"), element("span", null, libelleEtape(ev).titre));
-  bloc.append(resume);
-  if (ev.corps) {
-    resume.append(element("span", "etape-info", "voir ce qu'il a écrit"));
-    bloc.append(element("div", "etape-corps", ev.corps));
-  }
-  return bloc;
-}
-
-function carteDemande(ev, detail, interactif) {
-  const carte = element("div", "accord");
-  const titre = element("div", "accord-titre");
-  titre.append(icone("i-alerte"), element("span", null, interactif ? "Autoriser cette action ?" : "Action soumise à ton accord"));
-  carte.append(titre);
-  if (detail) carte.append(element("code", "accord-code", detail));
-  const raison = ev.raison ? ev.raison[0].toUpperCase() + ev.raison.slice(1) : "Action jugée dangereuse";
-  carte.append(element("div", "accord-raison", `${raison}.`));
-  if (!interactif) {
-    carte.append(element("div", "accord-decision", "Décision déjà prise."));
-    return carte;
-  }
-  const actions = element("div", "accord-actions");
-  const toujours = element("label");
-  const caseToujours = element("input");
-  caseToujours.type = "checkbox";
-  toujours.append(caseToujours, document.createTextNode("Toujours autoriser ce type d'action ici"));
-  const refuser = element("button", "bouton-refuser", "Refuser");
-  refuser.type = "button";
-  const continuer = element("button", "bouton-continuer", "Autoriser");
-  continuer.type = "button";
-  const decider = async (reponse) => {
-    actions.replaceWith(element("div", "accord-decision", reponse === "continuer" ? "Autorisée." : "Refusée."));
-    signaler("Cowork travaille…", ORANGE);
-    try {
-      await appeler("POST", `/api/cowork/${etat.tache}/decision`, { etape: ev.etape, reponse, toujours: caseToujours.checked });
-    } catch (e) {
-      signaler(e.message, ROUGE);
-    }
-  };
-  refuser.addEventListener("click", () => decider("refuser"));
-  continuer.addEventListener("click", () => decider("continuer"));
-  actions.append(toujours, refuser, continuer);
-  carte.append(actions);
-  return carte;
-}
-
-function remplirPlan(carte, etapes) {
-  const { faites, total } = avancementPlan(etapes);
-  const titre = element("div", "plan-titre");
-  titre.append(element("span", null, "Plan"), element("span", "plan-avancement", `${faites}/${total}`));
-  const liste = element("ul", "plan-liste");
-  for (const e of etapes) {
-    const ligne = element("li", e.fait ? "fait" : null);
-    ligne.append(element("span", "plan-case", e.fait ? "✓" : ""), element("span", null, e.texte));
-    liste.append(ligne);
-  }
-  carte.replaceChildren(titre, liste);
-}
-
-// La carte de plan à mettre à jour : la dernière du fil, si aucun message de l'utilisateur ne la suit.
-function cartePlanCourante(conteneur) {
-  const cartes = conteneur.querySelectorAll(":scope > .carte-plan");
-  const derniere = cartes[cartes.length - 1];
-  for (let suivant = derniere?.nextElementSibling; suivant; suivant = suivant.nextElementSibling) {
-    if (suivant.matches(".bulle.toi")) return null;
-  }
-  return derniere ?? null;
-}
-
-function bilanVide(bilan) {
-  return !bilan || (!bilan.crees?.length && !bilan.modifies?.length && !bilan.supprimes?.length
-    && !bilan.commandes?.length && !bilan.verifications && !bilan.plan_inacheve?.length && !bilan.processus?.length);
-}
-
-// Ce qu'Agent First a constaté, indépendamment de ce que Gemini annonce.
-function carteBilan(bilan) {
-  const { compteurs, fichiers } = lignesBilan(bilan);
-  const carte = element("div", "carte-bilan");
-  const titre = element("div", "bilan-titre");
-  titre.append(element("span", null, "Bilan d'Agent First"), element("span", "bilan-compteurs", compteurs));
-  carte.append(titre);
-  if (fichiers.length) {
-    const liste = element("div", "bilan-fichiers");
-    for (const { signe, chemin } of fichiers) {
-      const classe = { "+": "plus", "~": "modif", "−": "moins" }[signe];
-      const bouton = element("button", `bilan-fichier ${classe}`, `${signe} ${chemin}`);
-      bouton.type = "button";
-      bouton.title = "Voir l'étape correspondante";
-      bouton.addEventListener("click", () => montrerEtape(chemin));
-      liste.append(bouton);
-    }
-    carte.append(liste);
-  }
-  for (const c of bilan.commandes ?? []) {
-    if (c.code !== null && c.code !== undefined && c.code !== 0) carte.append(element("div", "bilan-echec", `✗ ${c.texte} (code ${c.code})`));
-  }
-  if (bilan.plan_inacheve?.length) carte.append(element("div", "bilan-alerte", `Étapes du plan non cochées : ${bilan.plan_inacheve.join(" ; ")}`));
-  for (const p of bilan.processus ?? []) carte.append(element("div", "bilan-processus", `● #${p.id} ${p.commande} tourne encore`));
-  return carte;
-}
-
-function montrerEtape(chemin) {
-  const etapes = [...$("fil").querySelectorAll("details.etape")].filter((e) => e.dataset.detail === chemin);
-  const derniere = etapes[etapes.length - 1];
-  if (!derniere) return;
-  if (derniere.classList.contains("a-corps")) derniere.open = true;
-  derniere.scrollIntoView({ behavior: "smooth", block: "center" });
-}
-
-function carteQuestion(ev, interactif) {
-  const carte = element("div", "carte-question");
-  const titre = element("div", "question-titre");
-  titre.append(icone("i-messages"), element("span", null, "Gemini te demande"));
-  carte.append(titre, element("div", "question-texte", ev.question));
-  if (interactif) carte.append(element("div", "question-aide", "Réponds dans la zone de saisie : Gemini reprendra la tâche là où il s'est arrêté."));
-  return carte;
-}
-
-// Affiche les étapes d'une tâche dans `conteneur` ; `interactif` = tâche en direct (boutons d'accord actifs).
-// Les lignes qui se suivent sont regroupées pour rester serrées, comme dans un terminal.
-function creerRenduCowork(conteneur, interactif) {
-  let groupe = null;
-  let derniere = null; // ligne « action » qui recevra son résultat
-  let accordOuvert = null; // boutons d'une demande d'accord encore sans réponse
-  const ajouterLigne = (ligne) => {
-    if (!groupe || conteneur.lastElementChild !== groupe) {
-      groupe = element("div", "groupe-etapes");
-      conteneur.append(groupe);
-    }
-    groupe.append(ligne);
-  };
-  const ajouterBilan = (bilan) => {
-    if (!bilanVide(bilan)) conteneur.append(carteBilan(bilan));
-  };
-  return (ev) => {
-    if (ev.type === "statut") return;
-    if (ev.type === "processus") {
-      if (interactif && ev.liste) dessinerProcessus(ev.liste);
-      return;
-    }
-    // La tâche avance : une demande restée ouverte a été tranchée ailleurs (API, autre fenêtre).
-    if (accordOuvert?.isConnected) accordOuvert.replaceWith(element("div", "accord-decision", "Décision prise."));
-    accordOuvert = null;
-    if (ev.type === "tour") {
-      ajouterLigne(element("div", "etape-tour", detailTour(ev)));
-    } else if (ev.type === "action") {
-      derniere = ligneEtape(ev, interactif);
-      ajouterLigne(derniere);
-    } else if (ev.type === "resultat") {
-      if (derniere) ajouterResultat(derniere, ev);
-    } else if (ev.type === "saute") {
-      ajouterLigne(ligneSautee(ev));
-    } else if (ev.type === "plan") {
-      const carte = cartePlanCourante(conteneur);
-      if (carte) remplirPlan(carte, ev.etapes);
-      else {
-        const nouvelle = element("div", "carte-plan");
-        remplirPlan(nouvelle, ev.etapes);
-        conteneur.append(nouvelle);
-      }
-    } else if (ev.type === "demande") {
-      if (derniere) marquerEtape(derniere, "decision");
-      const carte = carteDemande(ev, derniere?.dataset.detail ?? "", interactif);
-      conteneur.append(carte);
-      accordOuvert = carte.querySelector(".accord-actions");
-    } else if (ev.type === "erreur_format") {
-      ajouterLigne(noteFormat(ev));
-    } else if (ev.type === "question") {
-      conteneur.append(carteQuestion(ev, interactif));
-    } else if (ev.type === "termine") {
-      conteneur.append(bulle({ role: "gemini", texte: ev.resume.replace(/^TERMINÉ\s*:\s*/, ""), modele: null, niveau: null, duree: null }));
-      ajouterBilan(ev.bilan);
-    } else {
-      if (ev.type === "refus" && derniere) marquerEtape(derniere, "ko");
-      const point = ["autorise", "erreur_gemini", "relance_fin"].includes(ev.type) ? "decision" : ev.type === "relais" ? "" : "ko";
-      ajouterLigne(noteEtape(ev, point));
-      if (FIN_DE_TACHE.includes(ev.type)) ajouterBilan(ev.bilan);
-    }
-    defilerEnBas();
-  };
-}
-
 async function envoyerCowork(texte) {
   if (!etat.dossier) {
-    signaler("Choisis d'abord un dossier de travail", ROUGE);
+    notifier("Choisis d'abord un dossier de travail", "attention");
     return;
   }
-  etat.occupe = true;
-  $("form-saisie").classList.add("occupe");
+  occuper(true);
   $("saisie").value = "";
   ajusterSaisie();
   const fil = $("fil");
   fil.querySelector(".vide-discussion")?.remove();
   fil.append(bulle({ role: "toi", texte }));
   if (!etat.courante) $("titre-conversation").textContent = titreDepuis(texte);
-  defilerEnBas();
-  signaler("Cowork travaille…", ORANGE);
+  defilerEnBas(true);
+  statut("Cowork démarre…", "en-cours");
   try {
-    if (!etat.courante) {
-      const conversation = await appeler("POST", "/api/conversations", {
-        mode: "cowork",
-        dossier: etat.dossier,
-        modele: etat.modele,
-        niveau: etat.niveau,
-      });
-      etat.courante = conversation.id;
-    }
-    await appeler("POST", `/api/cowork/${etat.courante}/messages`, { texte });
+    if (!etat.courante) await creerConversation({ mode: "cowork", dossier: etat.dossier });
+    const { fournisseur: f, modele, niveau } = etat.choix;
+    await appeler("POST", `/api/cowork/${etat.courante}/messages`, { texte, fournisseur: f, modele, niveau });
+    etat.conversation = { ...(etat.conversation ?? {}), fournisseur: f };
   } catch (e) {
     fil.append(bulle({ role: "erreur", texte: e.message }));
     $("saisie").value = texte; // pour pouvoir le renvoyer
     ajusterSaisie();
-    signaler(e.message === "Agent First n'est pas démarré." ? "Agent First arrêté" : "Erreur", ROUGE);
     finirCowork();
     return;
   }
@@ -714,76 +402,88 @@ async function envoyerCowork(texte) {
 }
 
 // Suit une tâche en direct. Rouvrir une conversation dont la tâche tourne rejoue ses étapes (depuis 0).
+// Une coupure (veille, réseau) : on se reconnecte là où on s'était arrêté, tant que la tâche tourne.
 function ecouterFlux(identifiant, depuis = 0) {
   etat.flux?.close();
-  const ajouter = creerRenduCowork($("fil"), true);
+  const ajouter = creerRenduCowork($("fil"), true, dessinerProcessus);
   etat.tache = identifiant;
-  etat.occupe = true;
-  $("form-saisie").classList.add("occupe");
-  $("arreter").hidden = false;
+  occuper(true);
   chargerConversations(); // la conversation apparaît tout de suite, avec son point « en cours »
   let actions = 0;
-  const source = new EventSource(`/api/cowork/${identifiant}/flux?depuis=${depuis}`);
-  etat.flux = source;
-  source.onmessage = (message) => {
-    const ev = JSON.parse(message.data);
-    if (etat.courante === identifiant) ajouter(ev); // seulement si la conversation est encore affichée
-    if (ev.type === "action") actions += 1;
-    if (FIN_DE_TACHE.includes(ev.type)) {
+  let position = depuis;
+  let essais = 0;
+
+  const brancher = () => {
+    const source = new EventSource(`/api/cowork/${identifiant}/flux?depuis=${position}`);
+    etat.flux = source;
+    source.onmessage = (message) => {
+      essais = 0;
+      position += 1;
+      const ev = JSON.parse(message.data);
+      if (etat.courante === identifiant) ajouter(ev); // seulement si la conversation est encore affichée
+      if (ev.type === "action") actions += 1;
+      if (FIN_DE_TACHE.includes(ev.type)) {
+        source.close();
+        if (etat.courante === identifiant) {
+          // une étape restée sans résultat (tâche arrêtée) ne doit plus avoir l'air de tourner
+          $("fil").querySelectorAll(".point-etat.attente").forEach((p) => (p.className = "point-etat"));
+        }
+        finirCowork();
+        if (ev.type === "termine") notifier("Tâche terminée", "ok");
+        else if (ev.type === "question") {
+          notifier("Une question t'attend", "attention");
+          if (etat.courante === identifiant) $("saisie").focus();
+        } else notifier(libelleEtape(ev).titre, "erreur");
+      } else if (ev.type === "statut") {
+        if (ev.statut === "waiting_approval") statut("En attente de ta décision", "limite");
+        if (ev.statut === "queued") statut("En file d'attente : une autre tâche se termine…", "limite");
+      } else if (ev.type !== "processus" && ev.type !== "demande") {
+        statut(`Cowork travaille… ${actions} action${actions > 1 ? "s" : ""}`, "en-cours");
+      }
+    };
+    source.onerror = async () => {
       source.close();
-      if (etat.courante === identifiant) {
-        // une étape restée sans résultat (tâche arrêtée) ne doit plus avoir l'air de tourner
-        $("fil").querySelectorAll(".point-etat.attente").forEach((p) => (p.className = "point-etat"));
+      if (etat.tache !== identifiant) return;
+      // La tâche tourne-t-elle encore ? Sinon on relit la conversation (le bilan est enregistré).
+      const lue = await appeler("GET", `/api/conversations/${identifiant}`).catch(() => null);
+      if (etat.tache !== identifiant) return;
+      if (lue?.tache?.en_cours && essais < 8) {
+        essais += 1;
+        statut("Connexion perdue : reprise…", "limite");
+        setTimeout(() => etat.tache === identifiant && brancher(), Math.min(10000, 1000 * 2 ** (essais - 1)));
+        return;
       }
       finirCowork();
-      if (ev.type === "erreur" && /est bloqué/.test(ev.corps)) chargerModes();
-      if (ev.type === "termine") signaler("Gemini prêt", VERT);
-      else if (ev.type === "question") {
-        signaler("Gemini attend ta réponse", ORANGE);
-        if (etat.courante === identifiant) $("saisie").focus();
-      } else signaler(libelleEtape(ev).titre, ROUGE);
-    } else if (ev.type === "statut") {
-      if (ev.statut === "waiting_approval") signaler("En attente de ta décision", ORANGE);
-      if (ev.statut === "queued") signaler("En file d'attente : Gemini termine une autre demande…", ORANGE);
-    } else if (ev.type !== "processus" && ev.type !== "demande") {
-      signaler(`Cowork travaille… ${actions} action${actions > 1 ? "s" : ""}`, ORANGE);
-    }
+      if (lue) {
+        if (etat.courante === identifiant) ouvrirConversation(identifiant);
+      } else notifier("Agent First injoignable : la tâche n'est plus suivie", "erreur");
+    };
   };
-  source.onerror = () => {
-    source.close(); // pas de reconnexion automatique
-    if (etat.tache === identifiant) {
-      finirCowork();
-      signaler("Flux interrompu (Agent First arrêté ?)", ROUGE);
-    }
-  };
+  brancher();
 }
 
 function finirCowork() {
-  etat.occupe = false;
+  etat.flux?.close();
   etat.tache = null;
   etat.flux = null;
-  $("form-saisie").classList.remove("occupe");
-  $("arreter").hidden = true;
+  occuper(false);
   chargerConversations();
+  chargerFournisseurs();
   if (etat.mode === "cowork" && etat.courante) chargerProcessus(etat.courante); // les serveurs lancés restent affichés
 }
 
-async function arreterTache() {
-  if (etat.reponseEnCours && etat.courante) {
-    try {
-      await appeler("POST", `/api/conversations/${etat.courante}/arreter`);
-      signaler("Arrêt demandé…", ORANGE);
-    } catch (e) {
-      signaler(e.message, ROUGE);
-    }
-    return;
-  }
-  if (!etat.tache) return;
+async function arreter() {
+  if (!etat.occupe || !etat.courante) return;
   try {
-    await appeler("POST", `/api/cowork/${etat.tache}/arreter`);
-    signaler("Arrêt demandé (après l'étape en cours)…", ORANGE);
+    if (etat.reponseEnCours) {
+      await appeler("POST", `/api/conversations/${etat.courante}/arreter`);
+      statut("Arrêt demandé…", "limite");
+    } else if (etat.tache) {
+      await appeler("POST", `/api/cowork/${etat.tache}/arreter`);
+      statut("Arrêt demandé (après l'étape en cours)…", "limite");
+    }
   } catch (e) {
-    signaler(e.message, ROUGE);
+    notifier(e.message, "erreur");
   }
 }
 
@@ -795,10 +495,10 @@ function dessinerProcessus(liste) {
     ...actifs.map((p) => {
       const pilule = element("span", "pilule-processus");
       pilule.title = `${p.commande}\nlancé il y a ${formaterDuree((Date.now() - new Date(p.depuis)) / 1000)}`;
-      const arreter = element("button", "pilule-arreter", "Arrêter");
-      arreter.type = "button";
-      arreter.addEventListener("click", () => arreterProcessus(p.id));
-      pilule.append(element("span", "point-processus"), element("span", "pilule-commande", `#${p.id} ${p.commande}`), arreter);
+      const bouton = element("button", "pilule-arreter", "Arrêter");
+      bouton.type = "button";
+      bouton.addEventListener("click", () => arreterProcessus(p.id));
+      pilule.append(element("span", "point-processus"), element("span", "pilule-commande", `#${p.id} ${p.commande}`), bouton);
       return pilule;
     }),
   );
@@ -818,9 +518,9 @@ async function arreterProcessus(numero) {
   try {
     const r = await appeler("POST", `/api/cowork/${etat.courante}/processus/${numero}/arreter`);
     dessinerProcessus(r.processus);
-    signaler(r.ok ? `Processus #${numero} arrêté` : r.corps, r.ok ? VERT : ROUGE);
+    notifier(r.ok ? `Processus #${numero} arrêté` : r.corps, r.ok ? "ok" : "erreur");
   } catch (e) {
-    signaler(e.message, ROUGE);
+    notifier(e.message, "erreur");
   }
 }
 
@@ -857,12 +557,12 @@ function dessinerMode() {
   $("choisir-dossier").hidden = etat.mode !== "cowork";
   $("nom-dossier").textContent = etat.dossier ? cheminCourt(etat.dossier) : "Choisir un dossier";
   $("choisir-dossier").title = etat.dossier ? `${etat.dossier} (cliquer pour changer)` : "Choisir le dossier de travail";
-  $("saisie").placeholder = etat.mode === "cowork" ? "Décris une tâche à Cowork…" : "Demande à Gemini…";
+  $("saisie").placeholder = etat.mode === "cowork" ? "Décris une tâche à faire sur ton PC…" : "Écris ton message…";
 }
 
 function choisirMode(mode) {
   if (etat.occupe) {
-    signaler("Attends la fin de la tâche en cours", ORANGE);
+    notifier("Attends la fin de la réponse ou de la tâche en cours", "attention");
     return;
   }
   if (mode === etat.mode && !etat.courante) return;
@@ -873,27 +573,25 @@ function choisirMode(mode) {
 async function choisirDossier() {
   if (etat.occupe) return;
   try {
-    signaler("Choisis le dossier dans la fenêtre Windows…", ORANGE);
+    notifier("Choisis le dossier dans la fenêtre Windows…");
     const { dossier } = await appeler("POST", "/api/dossiers/choisir");
-    if (!dossier) {
-      signaler("Aucun dossier choisi", GRIS);
-      return;
-    }
+    if (!dossier) return;
     ecrire(CLE_DOSSIER, dossier);
     if (etat.courante && dossier !== etat.dossier) {
+      etat.dossier = dossier;
       nouvelleConversation(); // un autre dossier = une nouvelle conversation
     } else {
       etat.dossier = dossier;
       dessinerMode();
       $("fil").querySelector(".vide-discussion")?.replaceWith(accueilDiscussion());
     }
-    signaler("Dossier de travail choisi", VERT);
+    notifier("Dossier de travail choisi", "ok");
   } catch (e) {
-    signaler(e.message, ROUGE);
+    notifier(e.message, "erreur");
   }
 }
 
-// ---------- accueil / historique ----------
+// ---------- tableau de bord / historique ----------
 
 async function chargerAccueil() {
   const recherche = $("recherche-historique").value.trim();
@@ -905,14 +603,14 @@ async function chargerAccueil() {
     dessinerCartes(statistiques);
     dessinerLignes(conversations, recherche);
   } catch (e) {
-    signaler(e.message, ROUGE);
+    notifier(e.message, "erreur");
   }
 }
 
 function dessinerCartes(s) {
   const cartes = [
     ["Conversations", "sur la période", String(s.conversations)],
-    ["Messages", "envoyés à Gemini", String(s.messages)],
+    ["Messages", "envoyés", String(s.messages)],
     // Un nom de modèle est plus long qu'un nombre : écrit plus petit pour tenir dans la carte.
     ["Modèle favori", "le plus utilisé", s.modele_favori ?? "—", "texte"],
     ["Temps moyen", "par réponse", s.temps_moyen == null ? "—" : formaterDuree(s.temps_moyen)],
@@ -929,9 +627,7 @@ function dessinerCartes(s) {
 function dessinerLignes(conversations, recherche) {
   const lignes = $("lignes-historique");
   if (!conversations.length) {
-    lignes.replaceChildren(
-      element("p", "vide", recherche ? "Aucune conversation ne correspond." : "Aucune conversation sur cette période."),
-    );
+    lignes.replaceChildren(element("p", "vide", recherche ? "Aucune conversation ne correspond." : "Aucune conversation sur cette période."));
     return;
   }
   lignes.replaceChildren(
@@ -942,149 +638,41 @@ function dessinerLignes(conversations, recherche) {
       ouvrir.title = c.titre;
       ouvrir.addEventListener("click", () => ouvrirConversation(c.id));
       const nombre = `${c.nb_messages} message${c.nb_messages > 1 ? "s" : ""}`;
-      const infos = element("span", "ligne-infos", [c.modele, nombre, formaterDate(c.modifie_le)].filter(Boolean).join(" · "));
-      const supprimer = element("button", "icone");
-      supprimer.type = "button";
-      supprimer.title = "Retirer de l'historique";
-      supprimer.setAttribute("aria-label", `Retirer « ${c.titre} » de l'historique`);
-      supprimer.append(icone("i-corbeille"));
-      supprimer.addEventListener("click", () => supprimerConversation(c));
-      const mode = (c.mode === "cowork" ? "cowork" : "chat") + (c.source === "api" ? " · api" : "");
-      ligne.append(ouvrir, element("span", "ligne-mode", mode), infos, supprimer);
+      const infos = element("span", "ligne-infos", [c.modele && c.modele !== "Par défaut" ? c.modele : null, nombre, formaterDate(c.modifie_le)].filter(Boolean).join(" · "));
+      const mode = [c.mode === "cowork" ? "cowork" : "chat", nom(c.fournisseur).toLowerCase(), c.source === "api" ? "api" : null].filter(Boolean).join(" · ");
+      ligne.append(ouvrir, element("span", "ligne-mode", mode), infos,
+        boutonIcone("i-corbeille", `Retirer « ${c.titre} » de l'historique`, () => supprimerConversation(c)));
       return ligne;
     }),
   );
-}
-
-async function supprimerConversation(c) {
-  if (!confirm(`Retirer « ${c.titre} » de l'historique de l'app ?\nLa conversation reste dans Gemini.`)) return;
-  try {
-    await appeler("DELETE", `/api/conversations/${c.id}`);
-    if (etat.courante === c.id) etat.courante = null;
-    chargerAccueil();
-    chargerConversations();
-  } catch (e) {
-    signaler(e.message, ROUGE);
-  }
-}
-
-// ---------- paramètres ----------
-
-function remplir(select, options, valeur) {
-  select.replaceChildren(...options.map((o) => new Option(`${o.nom} — ${o.description}`, o.nom, false, o.nom === valeur)));
-}
-
-function ouvrirParametres() {
-  const defaut = lire(CLE_DEFAUT, {});
-  const actif = (liste) => liste.find((o) => o.actif)?.nom;
-  remplir($("defaut-modele"), etat.modes.modeles, defaut.modele ?? actif(etat.modes.modeles));
-  remplir($("defaut-niveau"), etat.modes.niveaux, defaut.niveau ?? actif(etat.modes.niveaux));
-  const s = etat.serveur;
-  const lignes = [
-    ["Agent First", s ? ["prêt", VERT] : ["arrêté", ROUGE]],
-    ["Chrome dédié", !s ? ["inconnu", GRIS] : s.chrome ? ["ouvert", VERT] : ["s'ouvrira au premier message", GRIS]],
-    ["Compte Google", !s ? ["inconnu", GRIS] : ETATS_GOOGLE[String(s.google)]],
-  ];
-  $("etats").replaceChildren(
-    ...lignes.map(([nom, [texte, couleur]]) => {
-      const ligne = element("div", "etat");
-      const point = element("span", "point");
-      point.style.background = couleur;
-      ligne.append(point, element("span", null, `${nom} · ${texte}`));
-      return ligne;
-    }),
-  );
-  dessinerApiReseau();
-  $("parametres").showModal();
-}
-
-async function dessinerApiReseau() {
-  const zone = $("api-reseau");
-  let infos;
-  try {
-    infos = await appeler("GET", "/api/api-reseau");
-  } catch {
-    zone.replaceChildren();
-    return;
-  }
-  const titre = element("h3", null, "API réseau");
-  if (!infos.active) {
-    zone.replaceChildren(titre, element("p", "note", "Désactivée. Pour l'activer : API_ACTIVE = True dans config.py, puis redémarre Agent First."));
-    return;
-  }
-  const regenerer = element("button", "bouton-secondaire", "Régénérer la clé");
-  regenerer.type = "button";
-  regenerer.addEventListener("click", async () => {
-    if (!confirm("Créer une nouvelle clé ?\nLes programmes qui utilisent l'ancienne devront être mis à jour.")) return;
-    try {
-      await appeler("POST", "/api/api-reseau/cle");
-      dessinerApiReseau();
-      signaler("Nouvelle clé créée", VERT);
-    } catch (e) {
-      signaler(e.message, ROUGE);
-    }
-  });
-  zone.replaceChildren(
-    titre,
-    ligneApi("Adresse", infos.adresse, infos.adresse),
-    ligneApi("Clé", `••••••••${infos.cle.slice(-4)}`, infos.cle),
-    element("p", "note", "Pour d'autres programmes, sur ce PC ou ton réseau : format OpenAI (/v1/chat/completions) et tâches Cowork (/v1/cowork), avec l'en-tête Authorization: Bearer <clé>. Exemples dans le README."),
-    regenerer,
-  );
-}
-
-function ligneApi(nom, affiche, aCopier) {
-  const ligne = element("div", "ligne-api");
-  const copier = element("button", "icone");
-  copier.type = "button";
-  copier.title = `Copier : ${nom.toLowerCase()}`;
-  copier.setAttribute("aria-label", copier.title);
-  copier.append(icone("i-copier"));
-  copier.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(aCopier);
-      signaler(`${nom} copiée`, VERT);
-    } catch {
-      signaler("Copie impossible", ROUGE);
-    }
-  });
-  ligne.append(element("span", "ligne-api-nom", nom), element("code", null, affiche), copier);
-  return ligne;
-}
-
-function sauverDefaut() {
-  ecrire(CLE_DEFAUT, { modele: $("defaut-modele").value, niveau: $("defaut-niveau").value });
-  signaler("Réglages par défaut enregistrés", VERT);
 }
 
 // ---------- démarrage ----------
 
 function brancherEvenements() {
   $("nouvelle").addEventListener("click", nouvelleConversation);
+  $("ouvrir-palette").addEventListener("click", ouvrirPalette);
   $("aller-accueil").addEventListener("click", () => {
     afficherVue("accueil");
     chargerAccueil();
   });
-  $("aller-historique").addEventListener("click", async () => {
-    afficherVue("accueil");
-    await chargerAccueil();
-    $("panneau-historique").scrollIntoView({ behavior: "smooth" });
-  });
-  $("ouvrir-parametres").addEventListener("click", ouvrirParametres);
+  $("ouvrir-parametres").addEventListener("click", () => ouvrirParametres("general"));
   $("modes").addEventListener("click", (e) => {
     const bouton = e.target.closest("[data-mode]");
     if (bouton) choisirMode(bouton.dataset.mode);
   });
   $("choisir-dossier").addEventListener("click", choisirDossier);
-  $("arreter").addEventListener("click", arreterTache);
+  $("arreter").addEventListener("click", arreter);
   $("bandeau-ouvrir").addEventListener("click", () => {
     const id = $("bandeau-accord").dataset.conversation;
     if (id) ouvrirConversation(id);
   });
   $("replier").addEventListener("click", basculerBarre);
   $("deplier").addEventListener("click", basculerBarre);
-  $("bouton-modele").addEventListener("click", () => basculerMenu("bouton-modele"));
-  $("bouton-niveau").addEventListener("click", () => basculerMenu("bouton-niveau"));
+  $("titre-conversation").addEventListener("dblclick", () => {
+    if (!etat.courante) return;
+    renommer({ id: etat.courante, titre: $("titre-conversation").textContent }, $("titre-conversation"));
+  });
   $("form-saisie").addEventListener("click", (e) => {
     if (e.target === e.currentTarget) $("saisie").focus(); // un clic dans le cadre vide vise le texte
   });
@@ -1100,12 +688,10 @@ function brancherEvenements() {
   });
   $("saisie").addEventListener("input", ajusterSaisie);
   let attente;
-  const plusTard = (action) => {
+  $("recherche-historique").addEventListener("input", () => {
     clearTimeout(attente);
-    attente = setTimeout(action, 250);
-  };
-  $("recherche").addEventListener("input", () => plusTard(chargerConversations));
-  $("recherche-historique").addEventListener("input", () => plusTard(chargerAccueil));
+    attente = setTimeout(chargerAccueil, 250);
+  });
   $("form-historique").addEventListener("submit", (e) => {
     e.preventDefault();
     chargerAccueil();
@@ -1117,16 +703,20 @@ function brancherEvenements() {
     $("periodes").querySelectorAll("button").forEach((b) => b.classList.toggle("actif", b === bouton));
     chargerAccueil();
   });
-  $("defaut-modele").addEventListener("change", sauverDefaut);
-  $("defaut-niveau").addEventListener("change", sauverDefaut);
-  document.addEventListener("click", (e) => {
-    if (!e.target.closest(".menu-reglage")) fermerMenus();
-  });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") fermerMenus();
-    if (e.key === "/" && !e.target.closest("input, textarea, select")) {
+    const touche = e.key.toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && touche === "k") {
       e.preventDefault();
-      $("recherche").focus();
+      ouvrirPalette();
+    } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && touche === "o") {
+      e.preventDefault();
+      nouvelleConversation();
+    } else if (e.key === "Escape" && !document.querySelector("dialog[open]")) {
+      if (menusOuverts()) fermerMenus();
+      else if (etat.occupe) arreter();
+    } else if (e.key === "/" && !e.target.closest("input, textarea, select, [contenteditable]")) {
+      e.preventDefault();
+      ouvrirPalette();
     }
   });
 }
@@ -1134,19 +724,40 @@ function brancherEvenements() {
 async function demarrer() {
   if (lire(CLE_BARRE, false)) document.body.classList.add("barre-repliee");
   brancherEvenements();
+  brancherDefilement();
+  brancherMenus({ ouvrirParametres, changement: () => $("fil").querySelector(".vide-discussion")?.replaceWith(accueilDiscussion()) });
+  brancherParametres({
+    rafraichir: chargerFournisseurs,
+    changementDefaut: () => {
+      if (!etat.courante) nouvelleConversation();
+    },
+  });
+  brancherPalette({
+    ouvrir: ouvrirConversation,
+    actions: [
+      { titre: "Nouvelle conversation", icone: "i-plus", raccourci: "Ctrl Maj O", faire: nouvelleConversation },
+      { titre: "Nouvelle tâche Cowork", icone: "i-terminal", faire: () => choisirMode("cowork") },
+      { titre: "Tableau de bord", icone: "i-accueil", faire: () => $("aller-accueil").click() },
+      { titre: "Paramètres", icone: "i-reglages", faire: () => ouvrirParametres("general") },
+      { titre: "Fournisseurs et clés API", icone: "i-reglages", faire: () => ouvrirParametres("fournisseurs") },
+      { titre: "Secours si limite ou panne", icone: "i-relais", faire: () => ouvrirParametres("general") },
+    ],
+  });
   dessinerMode();
   afficherVue("accueil");
-  signaler("Connexion…", GRIS);
   await verifierEtat();
+  await chargerFournisseurs();
+  etat.choix = choixParDefaut();
+  dessinerMenus();
   chargerConversations();
   chargerAccueil();
   ecouterEvenements();
-  await chargerModes();
-  const defaut = lire(CLE_DEFAUT, {});
-  choisirReglages(defaut.modele, defaut.niveau);
   setInterval(() => {
     if (!etat.occupe) verifierEtat();
   }, 30000);
+  setInterval(() => {
+    if (!etat.occupe) chargerFournisseurs();
+  }, 120000);
 }
 
 demarrer();

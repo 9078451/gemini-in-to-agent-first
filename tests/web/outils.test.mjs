@@ -91,3 +91,43 @@ test("détails d'un message", async () => {
   assert.deepEqual(detailsMessage({ details: null }), {});
   assert.deepEqual(detailsMessage({ details: "{abîmé" }), {});
 });
+
+test("pied d'un message : fournisseur, modèle, interrompue", async () => {
+  const { metaMessage } = await import("../../agent_first/web/outils.js");
+  assert.equal(metaMessage({ fournisseur: "anthropic", modele: "claude-opus-5-5", duree: 3 }), "Claude · claude-opus-5-5 · 3 s");
+  assert.equal(metaMessage({ fournisseur: "mistral", modele: "m", duree: null }, { mistral: "Mistral" }), "Mistral · m");
+  assert.equal(metaMessage({ fournisseur: "claude_web", modele: "Par défaut" }), "Claude.ai");
+  assert.equal(metaMessage({ modele: "x", details: '{"interrompue": true}' }), "Gemini · x · interrompue");
+});
+
+test("secours et état en clair", async () => {
+  const { texteSecours, libelleEtat } = await import("../../agent_first/web/outils.js");
+  assert.equal(texteSecours({ details: '{"secours": {"de": "gemini", "raison": "limite"}}' }), "secours · Gemini à sa limite");
+  assert.equal(texteSecours({ details: null }), null);
+  assert.equal(libelleEtat("limite", "jusqu'à 2:58 PM"), "limite · jusqu'à 2:58 PM");
+  assert.equal(libelleEtat("pret"), "");
+  assert.equal(libelleEtat("panne"), "en panne");
+});
+
+test("choix valide parmi les fournisseurs actifs", async () => {
+  const { choixValide } = await import("../../agent_first/web/outils.js");
+  const actifs = [
+    { id: "gemini", modeles: [{ nom: "4 Argon", actif: true }, { nom: "3.8 Flash" }], niveaux: [{ nom: "Min.", actif: true }, { nom: "Max." }] },
+    { id: "ollama", modeles: [{ nom: "llama3.2", actif: true }], niveaux: [] },
+  ];
+  assert.deepEqual(choixValide(actifs, { fournisseur: "gemini", modele: "3.8 Flash", niveau: "Max." }),
+    { fournisseur: "gemini", modele: "3.8 Flash", niveau: "Max." });
+  assert.deepEqual(choixValide(actifs, { fournisseur: "ollama", modele: "absent", niveau: "Max." }),
+    { fournisseur: "ollama", modele: "llama3.2", niveau: null });
+  assert.deepEqual(choixValide(actifs, { fournisseur: "mistral" }), { fournisseur: "gemini", modele: "4 Argon", niveau: "Min." });
+  assert.deepEqual(choixValide([], {}), { fournisseur: null, modele: null, niveau: null });
+});
+
+test("palette : actions et conversations filtrées", async () => {
+  const { filtrerPalette } = await import("../../agent_first/web/outils.js");
+  const actions = [{ titre: "Nouvelle conversation" }, { titre: "Paramètres" }];
+  const conversations = [{ titre: "Script de sauvegarde" }, { titre: "Résumé" }];
+  assert.equal(filtrerPalette(actions, conversations, "").length, 4);
+  assert.deepEqual(filtrerPalette(actions, conversations, "sauve").map((x) => x.titre), ["Script de sauvegarde"]);
+  assert.deepEqual(filtrerPalette(actions, conversations, "PARAM").map((x) => x.titre), ["Paramètres"]);
+});
