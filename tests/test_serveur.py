@@ -265,3 +265,30 @@ def test_hote_inconnu_refuse(pilote, tmp_path):
     assert TestClient(app, base_url="http://evil.example").get("/api/etat").status_code == 400
     assert TestClient(app, base_url="http://127.0.0.1:8765").get("/api/etat").status_code == 200
     file.arreter()
+
+
+def test_renommer(client):
+    c = nouvelle(client)
+    envoyer(client, c, "Bonjour")
+    r = client.patch(f"/api/conversations/{c}", json={"titre": "Nouveau titre"})
+    assert r.status_code == 200 and r.json()["titre"] == "Nouveau titre"
+    assert client.patch("/api/conversations/inconnue", json={"titre": "x"}).status_code == 404
+    assert client.patch(f"/api/conversations/{c}", json={"titre": "  "}).status_code == 422
+
+
+def test_etat_ne_fait_pas_la_queue(pilote, tmp_path):
+    client, file = demarrer(pilote, tmp_path, delai=5.0)
+    try:
+        c = nouvelle(client)
+        pilote.duree = 1.5
+        with ThreadPoolExecutor(1) as fond:
+            envoi = fond.submit(envoyer, client, c, "long")
+            time.sleep(0.2)
+            debut = time.monotonic()
+            r = client.get("/api/etat")
+            assert time.monotonic() - debut < 0.5
+            assert r.json()["agent_first"] is True
+            assert envoi.result().status_code == 200
+        assert client.get("/api/etat").json()["google"] is True  # noté par l'envoi réussi
+    finally:
+        file.arreter()

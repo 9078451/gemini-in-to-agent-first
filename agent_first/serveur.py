@@ -16,10 +16,12 @@ from agent_first.cache_modes import CacheModes
 from agent_first.cle_api import GardeCle
 from agent_first.cowork_service import TacheEnCours
 from agent_first.diffuseur import Diffuseur
+from agent_first.etat_google import EtatGoogle
 from agent_first.file_attente import FileAttente
+from agent_first.fils_serveur import plus_de_fils
 from agent_first.historique import ConversationInconnue, Historique
 from agent_first.nettoyage import nettoyer_html
-from pilote.erreurs import ChoixBloque, ErreurPilote, ModeleIntrouvable, NiveauIntrouvable
+from pilote.erreurs import ChoixBloque, ErreurPilote, ModeleIntrouvable, NiveauIntrouvable, PasConnecteGoogle
 from pilote.modeles import Modes, ResultatGemini
 
 journal = logging.getLogger(__name__)
@@ -60,6 +62,17 @@ class MessageCowork(BaseModel):
         return valeur
 
 
+class Renommage(BaseModel):
+    titre: str
+
+    @field_validator("titre")
+    @classmethod
+    def titre_non_vide(cls, valeur: str) -> str:
+        if not valeur.strip():
+            raise ValueError("le titre est vide")
+        return valeur
+
+
 class Decision(BaseModel):
     etape: int
     reponse: str
@@ -87,11 +100,12 @@ def creer_app(
 ) -> FastAPI:
     """`file_chat` : la file de l'onglet du Chat (messages du Chat, état de Google, modèles) ;
     les tâches Cowork passent par celle du service `cowork`."""
-    app = FastAPI(title="Agent First")
+    app = FastAPI(title="Agent First", lifespan=plus_de_fils)
     if hotes_autorises:
         # Une page web ne doit pas pouvoir joindre l'app par « reliure DNS » (et lire la clé de l'API).
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=hotes_autorises)
     modes = cache_modes or CacheModes(file_chat, chrome_lance, modes_par_defaut)
+    google = EtatGoogle(file_chat, chrome_lance)
 
     @app.exception_handler(RequestValidationError)
     def demande_invalide(_requete, _exc):
@@ -99,14 +113,7 @@ def creer_app(
 
     @app.get("/api/etat")
     def etat():
-        lance = chrome_lance()
-        google = None
-        if lance:
-            try:
-                google = file_chat.soumettre(lambda pilote: pilote.est_connecte()).result(timeout=5)
-            except Exception:
-                google = None  # occupé ou injoignable : inconnu
-        return {"agent_first": True, "chrome": lance, "google": google}
+        return {"agent_first": True, "chrome": chrome_lance(), "google": google.lire()}
 
     @app.get("/api/modeles")
     def modeles():
@@ -197,6 +204,14 @@ def creer_app(
             return erreur(404, INCONNUE)
         return {"conversation": asdict(lue), "messages": [asdict(m) for m in messages], "tache": tache}
 
+    @app.patch("/api/conversations/{identifiant}")
+    def renommer(identifiant: str, demande: Renommage):
+        try:
+            historique.renommer(identifiant, demande.titre)
+            return asdict(historique.conversation(identifiant))
+        except ConversationInconnue:
+            return erreur(404, INCONNUE)
+
     @app.delete("/api/conversations/{identifiant}")
     def supprimer(identifiant: str):
         try:
@@ -222,11 +237,15 @@ def creer_app(
         except (ModeleIntrouvable, NiveauIntrouvable, ChoixBloque) as e:
             modes.oublier()  # la liste a changé : relue à la prochaine demande
             return echec(identifiant, 502, str(e))
+        except PasConnecteGoogle as e:
+            google.noter(False)
+            return echec(identifiant, 502, str(e))
         except ErreurPilote as e:
             return echec(identifiant, 502, str(e))
         except Exception as e:
             journal.exception("Erreur inattendue pendant l'envoi")
             return echec(identifiant, 500, f"Erreur inattendue : {e}")
+        google.noter(True)
         return {"message": enregistrer_reponse(identifiant, resultat)}
 
     @app.get("/api/statistiques")

@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     dossier TEXT,
     source TEXT NOT NULL DEFAULT 'app',
     tours_gemini INTEGER NOT NULL DEFAULT 0,
+    fournisseur TEXT NOT NULL DEFAULT 'gemini',
     cree_le TEXT NOT NULL,
     modifie_le TEXT NOT NULL
 );
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS messages (
     niveau TEXT,
     duree REAL,
     details TEXT,
+    fournisseur TEXT,
     cree_le TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id);
@@ -47,13 +49,13 @@ CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id);
 # Colonnes ajoutées après la v2 : migrées à l'ouverture des bases existantes.
 COLONNES_AJOUTEES = {
     "conversations": [("mode", "TEXT NOT NULL DEFAULT 'chat'"), ("dossier", "TEXT"), ("source", "TEXT NOT NULL DEFAULT 'app'"),
-                      ("tours_gemini", "INTEGER NOT NULL DEFAULT 0")],
-    "messages": [("details", "TEXT")],
+                      ("tours_gemini", "INTEGER NOT NULL DEFAULT 0"), ("fournisseur", "TEXT NOT NULL DEFAULT 'gemini'")],
+    "messages": [("details", "TEXT"), ("fournisseur", "TEXT")],
 }
 COLONNES_CONVERSATION = """c.id, c.titre, c.adresse, c.modele, c.niveau, c.mode, c.dossier, c.source, c.tours_gemini,
-    c.cree_le, c.modifie_le,
+    c.fournisseur, c.cree_le, c.modifie_le,
     (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id) AS nb_messages"""
-COLONNES_MESSAGE = "id, conversation_id, role, texte, html, modele, niveau, duree, details, cree_le"
+COLONNES_MESSAGE = "id, conversation_id, role, texte, html, modele, niveau, duree, details, fournisseur, cree_le"
 NON_VIDE = "EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)"
 
 
@@ -73,7 +75,8 @@ class Conversation:
     cree_le: str
     modifie_le: str
     source: str = "app"  # « app » ou « api » (créée par un autre programme via l'API réseau)
-    tours_gemini: int = 0  # messages envoyés dans la conversation Gemini en cours (Cowork)
+    tours_gemini: int = 0  # messages envoyés dans la conversation en cours chez le fournisseur (Cowork)
+    fournisseur: str = "gemini"  # celui de `adresse` : la conversation continue chez lui
     nb_messages: int = 0
 
 
@@ -89,6 +92,7 @@ class Message:
     duree: float | None
     details: str | None
     cree_le: str
+    fournisseur: str | None = None  # celui qui a répondu (None : messages d'avant les fournisseurs)
 
 
 def titre_depuis(texte: str) -> str:
@@ -112,13 +116,14 @@ class Historique:
         mode: str = "chat",
         dossier: str | None = None,
         source: str = "app",
+        fournisseur: str = "gemini",
     ) -> Conversation:
         with self._verrou:
             identifiant, date = uuid.uuid4().hex, self._date()
             self._base.execute(
-                """INSERT INTO conversations (id, modele, niveau, mode, dossier, source, cree_le, modifie_le)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (identifiant, modele, niveau, mode, dossier, source, date, date),
+                """INSERT INTO conversations (id, modele, niveau, mode, dossier, source, fournisseur, cree_le, modifie_le)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (identifiant, modele, niveau, mode, dossier, source, fournisseur, date, date),
             )
             self._base.commit()
             return self._conversation(identifiant)
@@ -155,6 +160,23 @@ class Historique:
             self._base.execute("UPDATE conversations SET adresse = NULL, tours_gemini = 0 WHERE id = ?", (identifiant,))
             self._base.commit()
 
+    def changer_fournisseur(self, identifiant: str, fournisseur: str, modele: str | None, niveau: str | None) -> None:
+        """La conversation continue chez un autre fournisseur : l'ancienne adresse ne vaut plus."""
+        with self._verrou:
+            self._conversation(identifiant)
+            self._base.execute(
+                """UPDATE conversations SET fournisseur = ?, modele = ?, niveau = ?, adresse = NULL, tours_gemini = 0
+                   WHERE id = ?""",
+                (fournisseur, modele, niveau, identifiant),
+            )
+            self._base.commit()
+
+    def renommer(self, identifiant: str, titre: str) -> None:
+        with self._verrou:
+            self._conversation(identifiant)
+            self._base.execute("UPDATE conversations SET titre = ? WHERE id = ?", (titre_depuis(titre), identifiant))
+            self._base.commit()
+
     def enregistrer_adresse(self, identifiant: str, adresse: str) -> None:
         with self._verrou:
             self._conversation(identifiant)
@@ -187,15 +209,16 @@ class Historique:
         niveau: str | None = None,
         duree: float | None = None,
         details: str | None = None,
+        fournisseur: str | None = None,
     ) -> Message:
         with self._verrou:
             conversation = self._conversation(identifiant)
             date = self._date()
             curseur = self._base.execute(
                 """INSERT INTO messages
-                   (conversation_id, role, texte, html, modele, niveau, duree, details, cree_le)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (identifiant, role, texte, html, modele, niveau, duree, details, date),
+                   (conversation_id, role, texte, html, modele, niveau, duree, details, fournisseur, cree_le)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (identifiant, role, texte, html, modele, niveau, duree, details, fournisseur, date),
             )
             titre = conversation.titre or (titre_depuis(texte) if role == "toi" else "")
             self._base.execute(
@@ -287,6 +310,10 @@ class Historique:
         base = sqlite3.connect(self._fichier, check_same_thread=False)
         try:
             base.row_factory = sqlite3.Row
+            # WAL : une écriture (chaque étape Cowork) ne bloque plus les lectures et coûte bien moins.
+            base.execute("PRAGMA journal_mode = WAL")
+            base.execute("PRAGMA synchronous = NORMAL")
+            base.execute("PRAGMA busy_timeout = 5000")
             base.execute("PRAGMA foreign_keys = ON")
             base.executescript(SCHEMA)
             self._migrer(base)

@@ -24,6 +24,7 @@ from agent_first.cache_modes import CacheModes
 from agent_first.cle_api import GardeCle
 from agent_first.cowork_service import ServiceCowork, TacheEnCours
 from agent_first.file_attente import FileAttente
+from agent_first.fils_serveur import plus_de_fils
 from agent_first.historique import ConversationInconnue, Historique
 from agent_first.openai_compat import (
     completion,
@@ -89,6 +90,7 @@ def creer_api_reseau(
         description="Gemini au format OpenAI (`/v1/chat/completions`) et tâches Cowork (`/v1/cowork`). "
         "Chaque appel exige `Authorization: Bearer <clé>` (clé dans Paramètres de l'app).",
         version="3",
+        lifespan=plus_de_fils,
     )
     memoire: OrderedDict[str, tuple[str, str]] = OrderedDict()  # empreinte → (conversation, adresse Gemini)
     verrou = threading.Lock()

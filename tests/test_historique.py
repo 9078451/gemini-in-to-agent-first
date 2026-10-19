@@ -206,3 +206,59 @@ def test_tours_gemini_comptes_puis_remis_a_zero(historique):
     historique.repartir(c.id)
     lue = historique.conversation(c.id)
     assert lue.tours_gemini == 0 and lue.adresse is None
+
+
+def test_base_en_wal(historique):
+    assert historique._base.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_fournisseur_par_defaut_gemini(historique):
+    c = historique.creer()
+    assert historique.conversation(c.id).fournisseur == "gemini"
+
+
+def test_fournisseur_note_sur_message_et_conversation(historique):
+    c = historique.creer("claude-opus-5-5", None, fournisseur="anthropic")
+    historique.ajouter_message(c.id, "toi", "Bonjour")
+    m = historique.ajouter_message(c.id, "gemini", "Salut", modele="claude-opus-5-5", fournisseur="anthropic")
+    assert m.fournisseur == "anthropic"
+    assert historique.conversation(c.id).fournisseur == "anthropic"
+
+
+def test_changer_fournisseur_oublie_l_adresse(historique):
+    c = historique.creer("4 Argon", "Min.")
+    historique.ajouter_message(c.id, "toi", "Bonjour")
+    historique.enregistrer_adresse(c.id, "https://gemini.google.com/app/abc")
+    historique.compter_tour(c.id)
+    historique.changer_fournisseur(c.id, "ollama", "llama3.2", None)
+    lue = historique.conversation(c.id)
+    assert (lue.fournisseur, lue.modele, lue.niveau, lue.adresse, lue.tours_gemini) == ("ollama", "llama3.2", None, None, 0)
+
+
+def test_renommer(historique):
+    c = historique.creer()
+    historique.ajouter_message(c.id, "toi", "Bonjour")
+    historique.renommer(c.id, "  Mon titre  ")
+    assert historique.conversation(c.id).titre == "Mon titre"
+    with pytest.raises(ConversationInconnue):
+        historique.renommer("inconnue", "x")
+
+
+def test_ancienne_base_migree_avec_fournisseur(tmp_path, horloge):
+    import sqlite3
+
+    fichier = tmp_path / "ancienne.db"
+    base = sqlite3.connect(fichier)
+    base.executescript(
+        """CREATE TABLE conversations (id TEXT PRIMARY KEY, titre TEXT NOT NULL DEFAULT '', adresse TEXT,
+               modele TEXT, niveau TEXT, cree_le TEXT NOT NULL, modifie_le TEXT NOT NULL);
+           CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL,
+               role TEXT NOT NULL, texte TEXT NOT NULL, html TEXT, modele TEXT, niveau TEXT, duree REAL,
+               cree_le TEXT NOT NULL);
+           INSERT INTO conversations VALUES ('c1', 'Ancienne', NULL, NULL, NULL, '2026-10-15T10:00:00', '2026-10-15T10:00:00');
+           INSERT INTO messages (conversation_id, role, texte, cree_le) VALUES ('c1', 'gemini', 'Salut', '2026-10-15T10:00:00');"""
+    )
+    base.close()
+    h = Historique(fichier, horloge)
+    assert h.conversation("c1").fournisseur == "gemini"
+    assert h.messages("c1")[0].fournisseur is None
