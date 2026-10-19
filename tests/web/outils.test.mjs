@@ -75,3 +75,19 @@ test("réglage par défaut bloqué : on prend un choix disponible", () => {
   assert.equal(choixDisponible([{ nom: "Max.", description: bloque, actif: true }], "Max."), "Max.");
   assert.equal(choixDisponible([], "Min."), null);
 });
+
+test("NDJSON lu par morceaux coupés au milieu d'une ligne", async () => {
+  const { lireNdjson } = await import("../../agent_first/web/outils.js");
+  let r = lireNdjson("", '{"type":"partiel","texte":"Bon"}\n{"type":"par');
+  assert.deepEqual(r.evenements, [{ type: "partiel", texte: "Bon" }]);
+  r = lireNdjson(r.reste, 'tiel","texte":"Bonjour"}\n\n');
+  assert.deepEqual(r.evenements, [{ type: "partiel", texte: "Bonjour" }]);
+  assert.equal(r.reste, "");
+});
+
+test("détails d'un message", async () => {
+  const { detailsMessage } = await import("../../agent_first/web/outils.js");
+  assert.deepEqual(detailsMessage({ details: '{"interrompue": true}' }), { interrompue: true });
+  assert.deepEqual(detailsMessage({ details: null }), {});
+  assert.deepEqual(detailsMessage({ details: "{abîmé" }), {});
+});

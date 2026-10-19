@@ -4,6 +4,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from playwright.sync_api import Error as ErreurPlaywright
 from playwright.sync_api import Locator, Page
@@ -11,16 +12,27 @@ from playwright.sync_api import Locator, Page
 from pilote import modes
 from pilote.attente import attendre_envoi, attendre_fin_reponse, attendre_nouvelle_reponse
 from pilote.chrome import OngletGemini
-from pilote.erreurs import DelaiDepasse, ErreurPilote, PasConnecteGoogle, RepereIntrouvable, VerificationGoogle
+from pilote.erreurs import (
+    DelaiDepasse, ErreurPilote, Interrompu, PasConnecteGoogle, RepereIntrouvable, VerificationGoogle,
+)
 from pilote.modeles import Modes, ResultatGemini
 from pilote.reperes import attendre_repere, compter, premier_present
-from pilote.selecteurs import BLOC_CODE, CONTENU_REPONSE, DECOR_REPONSE, ENTETE_CODE
+from pilote.selecteurs import BLOC_CODE, CONTENU_REPONSE, DECOR_REPONSE, ENTETE_CODE, REPERES
+from pilote.sonde import Sonde
 
 journal = logging.getLogger(__name__)
 
 # s : délai pour que la question apparaisse dans la conversation après le clic sur Envoyer.
 # Large : quand le compte atteint sa limite, Gemini peut accepter le message en retard.
 DELAI_ENVOI = 60.0
+# Ce que la sonde lit en un seul aller-retour (voir pilote/sonde.py).
+REPERES_SONDE = {
+    "question": REPERES["question"],
+    "reponse": REPERES["reponse"],
+    "generation": REPERES["bouton_arreter"],
+    "limite": REPERES["bandeau_limite"],
+}
+HTML_SONDE = {"contenu": CONTENU_REPONSE, "code": BLOC_CODE, "entete": ENTETE_CODE, "decor": DECOR_REPONSE}
 
 EXTRAIRE_HTML = """(element, s) => {
   const copie = (element.querySelector(s.contenu) || element).cloneNode(true);
@@ -119,13 +131,16 @@ class PiloteGemini:
         modele: str | None = None,
         niveau: str | None = None,
         delai: float | None = None,
+        au_fil: Callable[[str, str], None] | None = None,
     ) -> ResultatGemini:
         """Envoie `texte` dans la conversation `adresse` (None = nouvelle conversation),
         après avoir réglé le modèle et le niveau demandés. `delai` remplace, pour ce
-        message, la limite de temps de réponse par défaut."""
+        message, la limite de temps de réponse par défaut. `au_fil(texte, html)` reçoit la
+        réponse pendant qu'elle s'écrit ; s'il lève `Interrompu`, la réponse est arrêtée
+        dans Gemini et l'erreur remonte avec le texte déjà écrit."""
         page = self._page()
         try:
-            return self._envoyer(page, adresse, texte, modele, niveau, delai or self._delai_reponse)
+            return self._envoyer(page, adresse, texte, modele, niveau, delai or self._delai_reponse, au_fil)
         except RepereIntrouvable as e:
             raise RepereIntrouvable(e.nom, self._capturer(page)) from e
 
@@ -147,7 +162,8 @@ class PiloteGemini:
         return self._lire_reglages(page)
 
     def _envoyer(
-        self, page: Page, adresse: str | None, texte: str, modele: str | None, niveau: str | None, delai: float
+        self, page: Page, adresse: str | None, texte: str, modele: str | None, niveau: str | None, delai: float,
+        au_fil: Callable[[str, str], None] | None = None,
     ) -> ResultatGemini:
         if adresse is None:
             if not nouvelle_discussion_prete(page.url, self._url_nouvelle, compter(page, "question")):
@@ -165,8 +181,10 @@ class PiloteGemini:
         self._verifier_acces(page)
         self._ajuster(page, modele, niveau)
 
-        nb_avant = compter(page, "reponse")
-        questions_avant = compter(page, "question")
+        # Un seul aller-retour avec Chrome par vérification (avant : 4 à 6).
+        sonde = Sonde(page, REPERES_SONDE, html=HTML_SONDE if au_fil else None)
+        nb_avant = sonde.reponses()
+        questions_avant = sonde.questions()
         champ.first.click()
         page.keyboard.press("Control+A")
         page.keyboard.press("Delete")
@@ -175,9 +193,7 @@ class PiloteGemini:
         page.keyboard.insert_text(texte)
         attendre_repere(page, "bouton_envoyer", 5).first.click()
         try:
-            attendre_envoi(
-                lambda: compter(page, "question"), questions_avant, DELAI_ENVOI, lambda: self._bandeau_limite(page)
-            )
+            attendre_envoi(sonde.questions, questions_avant, DELAI_ENVOI, sonde.limite, intervalle=0.25)
         except ErreurPilote:
             # Vider le champ : sinon Gemini peut envoyer ce message plus tard, tout seul,
             # alors qu'Agent First a déjà abandonné.
@@ -190,16 +206,35 @@ class PiloteGemini:
         # avant même d'afficher le début de sa réponse.
         debut = time.monotonic()
         fin = debut + delai
-        nouvelle = self._attendre_nouvelle_reponse(page, nb_avant, questions_avant + 1, delai)
+        sonde.viser(nb_avant)
+        suivi = (lambda texte: au_fil(texte, sonde.html())) if au_fil else None
         try:
+            trouvee = attendre_nouvelle_reponse(
+                compter_reponses=sonde.reponses,
+                compter_questions=sonde.questions,
+                generation_en_cours=sonde.generation,
+                nb_reponses_avant=nb_avant,
+                nb_questions_attendu=questions_avant + 1,
+                delai=delai,
+                intervalle=0.2,
+                au_fil=suivi,
+            )
+            if not trouvee:
+                raise RepereIntrouvable("reponse")
             reponse = attendre_fin_reponse(
-                lire_texte=nouvelle.inner_text,
-                generation_en_cours=lambda: self._generation_en_cours(page),
+                lire_texte=sonde.texte,
+                generation_en_cours=sonde.generation,
                 delai_max=max(0.0, fin - time.monotonic()),
                 stabilite=self._stabilite,
+                intervalle=0.25,
+                au_fil=suivi,
             )
+        except Interrompu:
+            self._arreter_generation(page)
+            raise Interrompu(sonde.texte().strip(), sonde.html())
         except DelaiDepasse as e:
             raise DelaiDepasse(delai, e.partiel) from e  # le message cite la limite entière, pas le reste
+        nouvelle = premier_present(page, "reponse").nth(nb_avant)
         return ResultatGemini(
             reponse=reponse.strip(),
             adresse=page.url,
@@ -285,29 +320,14 @@ class PiloteGemini:
                 return
             time.sleep(0.2)
 
-    def _attendre_nouvelle_reponse(self, page: Page, nb_avant: int, nb_questions: int, delai: float) -> Locator:
-        trouvee = attendre_nouvelle_reponse(
-            compter_reponses=lambda: compter(page, "reponse"),
-            compter_questions=lambda: compter(page, "question"),
-            generation_en_cours=lambda: self._generation_en_cours(page),
-            nb_reponses_avant=nb_avant,
-            nb_questions_attendu=nb_questions,
-            delai=delai,
-        )
-        if not trouvee:
-            raise RepereIntrouvable("reponse")
-        return premier_present(page, "reponse").nth(nb_avant)
-
-    def _bandeau_limite(self, page: Page) -> str | None:
-        """Texte du bandeau « Votre limite sera réinitialisée à … », s'il est affiché."""
-        bandeau = premier_present(page, "bandeau_limite")
-        if bandeau is None or not bandeau.first.is_visible():
-            return None
-        return " ".join(bandeau.first.inner_text().split()) or None
-
-    def _generation_en_cours(self, page: Page) -> bool:
-        bouton = premier_present(page, "bouton_arreter")
-        return bouton is not None and bouton.first.is_visible()
+    def _arreter_generation(self, page: Page) -> None:
+        """Clique sur « Interrompre la réponse » (arrêt demandé par l'utilisateur)."""
+        try:
+            bouton = premier_present(page, "bouton_arreter")
+            if bouton is not None and bouton.first.is_visible():
+                bouton.first.click(timeout=3000)
+        except ErreurPlaywright:
+            journal.warning("Bouton « Interrompre » introuvable : Gemini finira sa réponse seul", exc_info=True)
 
     def _verifier_acces(self, page: Page) -> None:
         if "/sorry/" in page.url or "challenge" in page.url:

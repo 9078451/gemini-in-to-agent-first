@@ -1,16 +1,37 @@
-"""Erreurs du pilote. Le texte de chaque erreur est destiné à l'utilisateur."""
+"""Erreurs des pilotes (sites pilotés dans Chrome, API). Le texte de chaque erreur est
+destiné à l'utilisateur.
+
+`secours = True` : le fournisseur est à sa limite ou indisponible ; la demande peut
+repartir chez le fournisseur de secours. Faux pour un choix de l'utilisateur à corriger
+(modèle ou niveau introuvable) ou un arrêt demandé.
+"""
 
 
 class ErreurPilote(Exception):
-    """Base de toutes les erreurs du pilote navigateur."""
+    """Base de toutes les erreurs des pilotes."""
+
+    secours = False
+
+
+class Interrompu(ErreurPilote):
+    """L'utilisateur a arrêté la réponse : `partiel` est ce qui était écrit."""
+
+    def __init__(self, partiel: str = "", html: str = "") -> None:
+        self.partiel = partiel
+        self.html = html
+        super().__init__("Réponse interrompue.")
 
 
 class ChromeInjoignable(ErreurPilote):
+    secours = True
+
     def __init__(self) -> None:
         super().__init__("Impossible de joindre le Chrome dédié (port de débogage fermé).")
 
 
 class PasConnecteGoogle(ErreurPilote):
+    secours = True
+
     def __init__(self) -> None:
         super().__init__(
             "Connecte-toi à Google dans la fenêtre Chrome dédiée, puis renvoie ton message."
@@ -18,6 +39,8 @@ class PasConnecteGoogle(ErreurPilote):
 
 
 class VerificationGoogle(ErreurPilote):
+    secours = True
+
     def __init__(self) -> None:
         super().__init__(
             "Google demande une vérification : fais-la toi-même dans la fenêtre "
@@ -26,19 +49,22 @@ class VerificationGoogle(ErreurPilote):
 
 
 class RepereIntrouvable(ErreurPilote):
-    def __init__(self, nom: str, capture: str | None = None) -> None:
+    secours = True
+
+    def __init__(self, nom: str, capture: str | None = None, site: str = "Gemini") -> None:
         self.nom = nom
         self.capture = capture
-        message = f"Repère « {nom} » introuvable : Gemini a peut-être changé son interface."
+        self.site = site
+        message = f"Repère « {nom} » introuvable : {site} a peut-être changé son interface."
         if capture:
             message += f" Capture d'écran : {capture}"
         super().__init__(message)
 
 
 class ModeleIntrouvable(ErreurPilote):
-    def __init__(self, nom: str) -> None:
+    def __init__(self, nom: str, fournisseur: str = "Gemini") -> None:
         self.nom = nom
-        super().__init__(f"Le modèle « {nom} » n'est pas proposé par Gemini.")
+        super().__init__(f"Le modèle « {nom} » n'est pas proposé par {fournisseur}.")
 
 
 class NiveauIntrouvable(ErreurPilote):
@@ -48,6 +74,8 @@ class NiveauIntrouvable(ErreurPilote):
 
 
 class MessageNonEnvoye(ErreurPilote):
+    secours = True
+
     def __init__(self) -> None:
         super().__init__(
             "Gemini n'a pas pris le message (connexion à Google coupée ?). "
@@ -59,6 +87,8 @@ class MessageAbandonne(ErreurPilote):
     """Gemini a pris le message, réfléchi, puis l'a abandonné sans répondre : la page est
     revenue à une nouvelle discussion (vu avec 4 Argon Max. sur une longue demande Cowork)."""
 
+    secours = True
+
     def __init__(self) -> None:
         super().__init__(
             "Gemini a abandonné ce message sans répondre (la page est revenue à une nouvelle discussion). "
@@ -68,6 +98,8 @@ class MessageAbandonne(ErreurPilote):
 
 
 class ChoixBloque(ErreurPilote):
+    secours = True
+
     def __init__(self, nom: str, reinitialisation: str) -> None:
         self.nom = nom
         super().__init__(
@@ -78,6 +110,8 @@ class ChoixBloque(ErreurPilote):
 
 
 class LimiteGemini(ErreurPilote):
+    secours = True
+
     def __init__(self, bandeau: str) -> None:
         super().__init__(
             f"Ton compte Gemini a atteint sa limite d'utilisation (« {bandeau} »). "
@@ -87,9 +121,70 @@ class LimiteGemini(ErreurPilote):
 
 
 class DelaiDepasse(ErreurPilote):
+    secours = True
+
     def __init__(self, delai: float, partiel: str) -> None:
         self.partiel = partiel
         message = f"Gemini n'a pas fini de répondre après {delai:.0f} s."
         if partiel:
             message += f" Début de la réponse :\n{partiel}"
         super().__init__(message)
+
+
+# ---- autres fournisseurs ---------------------------------------------------
+
+
+class PasConnecteSite(ErreurPilote):
+    secours = True
+
+    def __init__(self, site: str) -> None:
+        super().__init__(
+            f"Connecte-toi à {site} dans la fenêtre Chrome dédiée (Paramètres → Fournisseurs → "
+            "Ouvrir), puis renvoie ton message."
+        )
+
+
+class LimiteSite(ErreurPilote):
+    secours = True
+
+    def __init__(self, site: str, texte: str) -> None:
+        super().__init__(f"{site} refuse le message pour l'instant (« {texte} »).")
+
+
+class CleRefusee(ErreurPilote):
+    secours = True
+
+    def __init__(self, fournisseur: str) -> None:
+        super().__init__(
+            f"{fournisseur} refuse la clé API (absente, fausse ou sans accès à ce modèle). "
+            "Vérifie-la dans Paramètres → Fournisseurs."
+        )
+
+
+class LimiteFournisseur(ErreurPilote):
+    secours = True
+
+    def __init__(self, fournisseur: str, detail: str = "") -> None:
+        message = f"{fournisseur} limite les demandes pour l'instant (quota ou débit atteint)."
+        if detail:
+            message += f" Détail : {detail}"
+        super().__init__(message)
+
+
+class FournisseurIndisponible(ErreurPilote):
+    secours = True
+
+    def __init__(self, fournisseur: str, detail: str = "", partiel: str = "") -> None:
+        self.partiel = partiel
+        message = f"{fournisseur} ne répond pas correctement"
+        message += f" : {detail}" if detail else "."
+        if partiel:
+            message += f"\nDébut de la réponse :\n{partiel}"
+        super().__init__(message)
+
+
+class DemandeRefusee(ErreurPilote):
+    """Le fournisseur refuse la demande elle-même (contenu, taille, paramètre)."""
+
+    def __init__(self, fournisseur: str, detail: str) -> None:
+        super().__init__(f"{fournisseur} refuse la demande : {detail}")

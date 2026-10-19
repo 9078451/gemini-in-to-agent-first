@@ -292,3 +292,96 @@ def test_etat_ne_fait_pas_la_queue(pilote, tmp_path):
         assert client.get("/api/etat").json()["google"] is True  # noté par l'envoi réussi
     finally:
         file.arreter()
+
+
+# --- réponse au fil de l'eau (NDJSON) et bouton Arrêter ---
+
+class FauxPiloteFlux(FauxPilote):
+    """Écrit sa réponse morceau par morceau, en passant chaque état à `au_fil`."""
+
+    def __init__(self, morceaux=("Bon", "Bonjour", "Bonjour !"), pause=0.2, attente=0.0):
+        super().__init__()
+        self.morceaux, self.pause, self.attente = morceaux, pause, attente
+
+    def envoyer(self, adresse, texte, modele=None, niveau=None, delai=None, au_fil=None):
+        self.recus.append((adresse, texte, modele, niveau))
+        fin = time.monotonic() + self.attente
+        while time.monotonic() < fin:  # « réfléchit » avant d'écrire
+            au_fil("", "")
+            time.sleep(0.05)
+        for morceau in self.morceaux:
+            au_fil(morceau, f"<p>{morceau}</p>")
+            time.sleep(self.pause)
+        return ResultatGemini(self.morceaux[-1], "https://gemini.google.com/app/1", f"<p>{self.morceaux[-1]}</p>",
+                              modele, niveau, 1.0)
+
+
+def lignes_flux(client, conversation, texte="Salut"):
+    import json
+
+    evenements = []
+    with client.stream("POST", f"/api/conversations/{conversation}/messages?flux=1", json={"texte": texte}) as r:
+        assert r.headers["content-type"].startswith("application/x-ndjson")
+        for ligne in r.iter_lines():
+            if ligne:
+                evenements.append(json.loads(ligne))
+    return evenements
+
+
+def flux_avec(client, conversation, action, apres=0.35):
+    """Le flux tourne en fond ; `action` a lieu pendant qu'il s'écrit (le client de test ne
+    rend les lignes qu'à la fin de la réponse)."""
+    with ThreadPoolExecutor(1) as fond:
+        flux = fond.submit(lignes_flux, client, conversation)
+        time.sleep(apres)
+        action()
+        return flux.result(timeout=10)
+
+
+def test_reponse_au_fil(tmp_path):
+    client, file = demarrer(FauxPiloteFlux(), tmp_path)
+    try:
+        c = nouvelle(client)
+        evenements = lignes_flux(client, c)
+        assert [e["texte"] for e in evenements if e["type"] == "partiel"] == ["Bon", "Bonjour", "Bonjour !"]
+        assert evenements[-1]["type"] == "message"
+        assert evenements[-1]["message"]["texte"] == "Bonjour !"
+        assert roles(client, c) == ["toi", "gemini"]
+    finally:
+        file.arreter()
+
+
+def test_arreter_garde_ce_qui_est_ecrit(tmp_path):
+    client, file = demarrer(FauxPiloteFlux(morceaux=tuple("abcdefghij"), pause=0.15), tmp_path)
+    try:
+        c = nouvelle(client)
+        evenements = flux_avec(client, c, lambda: client.post(f"/api/conversations/{c}/arreter"))
+        final = evenements[-1]
+        assert final["type"] == "message"
+        assert final["message"]["texte"] in "abcdefghij" and final["message"]["texte"] != "j"
+        assert '"interrompue": true' in final["message"]["details"]
+        assert roles(client, c) == ["toi", "gemini"]  # enregistrée une seule fois
+    finally:
+        file.arreter()
+
+
+def test_arreter_avant_le_debut(tmp_path):
+    client, file = demarrer(FauxPiloteFlux(attente=5.0), tmp_path)
+    try:
+        c = nouvelle(client)
+        evenements = flux_avec(client, c, lambda: client.post(f"/api/conversations/{c}/arreter"))
+        assert evenements[-1]["type"] == "erreur" and evenements[-1]["code"] == 499
+        assert client.post(f"/api/conversations/{c}/arreter").json() == {"ok": False}  # plus rien en cours
+    finally:
+        file.arreter()
+
+
+def test_conversation_supprimee_pendant_le_flux(tmp_path):
+    client, file = demarrer(FauxPiloteFlux(pause=0.2), tmp_path)
+    try:
+        c = nouvelle(client)
+        evenements = flux_avec(client, c, lambda: client.delete(f"/api/conversations/{c}"))
+        assert evenements[-1]["type"] == "message"
+        assert evenements[-1]["message"]["id"] is None
+    finally:
+        file.arreter()

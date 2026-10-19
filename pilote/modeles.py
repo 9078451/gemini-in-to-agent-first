@@ -1,6 +1,6 @@
 """Ce que le pilote renvoie, et ce qu'Agent First attend d'un pilote."""
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,12 @@ class Modes:
 
 
 class Pilote(Protocol):
+    """Un fournisseur d'IA : un site piloté dans Chrome (Gemini, ChatGPT, Claude.ai) ou une API.
+
+    `adresse` : la conversation chez ce fournisseur (URL du site, ou `api:<id>`), None pour
+    une nouvelle. `au_fil(texte, html)` reçoit la réponse pendant qu'elle s'écrit ; s'il
+    lève `Interrompu`, le pilote arrête la réponse et l'erreur remonte avec le texte partiel."""
+
     def envoyer(
         self,
         adresse: str | None,
@@ -42,6 +48,7 @@ class Pilote(Protocol):
         modele: str | None = None,
         niveau: str | None = None,
         delai: float | None = None,
+        au_fil: Callable[[str, str], None] | None = None,
     ) -> ResultatGemini: ...
 
     def preparer(self) -> None: ...

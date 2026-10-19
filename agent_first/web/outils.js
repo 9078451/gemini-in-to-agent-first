@@ -56,6 +56,7 @@ export function metaMessage(message) {
     message.modele,
     message.niveau && `réflexion ${message.niveau}`,
     message.duree != null && formaterDuree(message.duree),
+    detailsMessage(message).interrompue && "interrompue",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -83,4 +84,21 @@ export function choixDisponible(liste, nom) {
 // « C:\Users\nom\Desktop\site » → « ~\Desktop\site » ; les autres chemins restent tels quels.
 export function cheminCourt(chemin) {
   return chemin.replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/i, "~");
+}
+
+// Flux NDJSON (une ligne JSON par évènement) lu par morceaux : un morceau peut couper une
+// ligne en deux. Renvoie les évènements complets et le reste, à compléter par le morceau suivant.
+export function lireNdjson(reste, morceau) {
+  const lignes = (reste + morceau).split("\n");
+  const fin = lignes.pop();
+  return { evenements: lignes.filter((l) => l.trim()).map((l) => JSON.parse(l)), reste: fin };
+}
+
+// Détails d'un message du Chat (JSON) : { interrompue, secours… } ; {} s'ils manquent ou sont illisibles.
+export function detailsMessage(message) {
+  try {
+    return JSON.parse(message.details || "{}") ?? {};
+  } catch {
+    return {};
+  }
 }

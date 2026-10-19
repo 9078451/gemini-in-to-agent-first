@@ -1,6 +1,6 @@
 // agent.first — état, affichage et événements de l'app.
-import { appeler } from "./api.js";
-import { cheminCourt, choixDisponible, formaterDate, formaterDuree, groupesParDate, limiteOption, metaMessage, titreDepuis } from "./outils.js";
+import { appeler, appelerFlux } from "./api.js";
+import { cheminCourt, choixDisponible, detailsMessage, formaterDate, formaterDuree, groupesParDate, limiteOption, metaMessage, titreDepuis } from "./outils.js";
 import { avancementPlan, detailTour, infoResultat, libelleEtape, lignesBilan, nombreLignes, normaliserAction, resumeDiff } from "./outils_cowork.js";
 
 const $ = (id) => document.getElementById(id);
@@ -344,28 +344,44 @@ async function envoyer() {
   if (!etat.courante) $("titre-conversation").textContent = titreDepuis(texte);
 
   const debut = Date.now();
+  let ecrit = false; // le premier morceau de réponse est arrivé
   signaler("Gemini réfléchit…", ORANGE);
   const minuteur = setInterval(() => {
-    const ecoule = `Gemini réfléchit… ${formaterDuree((Date.now() - debut) / 1000)}`;
+    const ecoule = `${ecrit ? "Gemini écrit…" : "Gemini réfléchit…"} ${formaterDuree((Date.now() - debut) / 1000)}`;
     libelle.textContent = ecoule;
     signaler(ecoule, ORANGE);
   }, 1000);
+
+  // Réponse en cours d'écriture : le même contenu que la réponse finale, avec un curseur.
+  const enCours = element("article", "bulle gemini en-ecriture");
+  const contenu = element("div", "markdown");
+  enCours.append(contenu);
+  $("arreter").hidden = false;
+  etat.reponseEnCours = true;
 
   try {
     if (!etat.courante) {
       const conversation = await appeler("POST", "/api/conversations", { modele: etat.modele, niveau: etat.niveau });
       etat.courante = conversation.id;
     }
-    const { message } = await appeler("POST", `/api/conversations/${etat.courante}/messages`, {
-      texte,
-      modele: etat.modele,
-      niveau: etat.niveau,
+    let fin = null;
+    await appelerFlux(`/api/conversations/${etat.courante}/messages?flux=1`, { texte, modele: etat.modele, niveau: etat.niveau }, (ev) => {
+      if (ev.type === "partiel") {
+        const enBas = estEnBas();
+        if (!ecrit) attente.replaceWith(enCours);
+        ecrit = true;
+        if (ev.html) contenu.innerHTML = ev.html; // nettoyé par Agent First (nh3)
+        else contenu.textContent = ev.texte;
+        if (enBas) defilerEnBas();
+      } else fin = ev;
     });
-    attente.replaceWith(bulle(message));
-    signaler("Gemini prêt", VERT);
+    if (!fin) throw new Error("Réponse incomplète : Agent First s'est peut-être arrêté.");
+    if (fin.type === "erreur") throw new Error(fin.erreur);
+    (ecrit ? enCours : attente).replaceWith(bulle(fin.message));
+    signaler(detailsMessage(fin.message).interrompue ? "Réponse interrompue" : "Gemini prêt", VERT);
     verifierEtat(); // Chrome et Google viennent de servir : l'état affiché se met à jour
   } catch (e) {
-    attente.replaceWith(bulle({ role: "erreur", texte: e.message }));
+    (ecrit ? enCours : attente).replaceWith(bulle({ role: "erreur", texte: e.message }));
     $("saisie").value = texte; // pour pouvoir le renvoyer
     ajusterSaisie();
     signaler(e.message === "Agent First n'est pas démarré." ? "Agent First arrêté" : "Erreur", ROUGE);
@@ -374,10 +390,17 @@ async function envoyer() {
   } finally {
     clearInterval(minuteur);
     etat.occupe = false;
+    etat.reponseEnCours = false;
+    $("arreter").hidden = true;
     $("form-saisie").classList.remove("occupe");
     defilerEnBas();
     chargerConversations();
   }
+}
+
+function estEnBas() {
+  const fil = $("fil");
+  return fil.scrollHeight - fil.scrollTop - fil.clientHeight < 40;
 }
 
 // ---------- Cowork ----------
@@ -746,6 +769,15 @@ function finirCowork() {
 }
 
 async function arreterTache() {
+  if (etat.reponseEnCours && etat.courante) {
+    try {
+      await appeler("POST", `/api/conversations/${etat.courante}/arreter`);
+      signaler("Arrêt demandé…", ORANGE);
+    } catch (e) {
+      signaler(e.message, ROUGE);
+    }
+    return;
+  }
   if (!etat.tache) return;
   try {
     await appeler("POST", `/api/cowork/${etat.tache}/arreter`);

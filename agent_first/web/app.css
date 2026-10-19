@@ -174,6 +174,9 @@ kbd { padding: 0 5px; border: 1px solid var(--bordure-2); border-radius: 4px; co
 .markdown blockquote { margin: .6em 0; padding-left: 12px; border-left: 2px solid var(--bordure-2); color: var(--texte-2); }
 .markdown hr { border: 0; border-top: 1px solid var(--bordure); }
 
+/* réponse en cours d'écriture : un curseur terre cuite au bout du texte */
+.en-ecriture .markdown > :last-child::after { content: ""; display: inline-block; width: 7px; height: 14px; margin-left: 3px; background: var(--accent); vertical-align: -2px; animation: pulser 1s steps(2) infinite; }
+
 /* ---------- étapes Cowork : une ligne monospace par action ---------- */
 .groupe-etapes { display: flex; flex-direction: column; font: 12.5px/1.5 var(--police-mono); }
 .etape > summary { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 3px 0; list-style: none; cursor: default; }

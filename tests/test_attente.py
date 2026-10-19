@@ -153,3 +153,37 @@ def test_sans_signal_de_generation_la_stabilite_longue_reste():
     attendre_fin_reponse(lambda: "abc", lambda: False, delai_max=180.0, stabilite=2.0,
                          intervalle=0.5, horloge=horloge, dormir=horloge.dormir)
     assert horloge.t >= 2.0
+
+
+# --- réponse au fil de l'eau ---
+
+def test_au_fil_recoit_le_texte_a_chaque_verification():
+    h, vus = Horloge(), []
+    attendre_fin_reponse(
+        suite_de_textes("Bon", "Bonjour", "Bonjour !"), lambda: h.t < 1.0, delai_max=180.0, stabilite=2.0,
+        intervalle=0.5, horloge=h, dormir=h.dormir, au_fil=vus.append,
+    )
+    assert vus[:2] == ["Bonjour", "Bonjour !"]  # « Bon » : lu avant la boucle, remplacé aussitôt
+    assert set(vus[2:]) == {"Bonjour !"}  # appelé aussi sans changement : un arrêt demandé est vu vite
+
+
+def test_exception_de_au_fil_remonte():
+    class Stop(Exception):
+        pass
+
+    def au_fil(texte):
+        if texte == "Bonjour":
+            raise Stop()
+
+    h = Horloge()
+    with pytest.raises(Stop):
+        attendre_fin_reponse(suite_de_textes("Bon", "Bonjour", "Bonjour !"), lambda: True, delai_max=180.0,
+                             stabilite=2.0, intervalle=0.5, horloge=h, dormir=h.dormir, au_fil=au_fil)
+
+
+def test_au_fil_appele_pendant_l_attente_de_la_reponse():
+    h, vus = Horloge(), []
+    attendre_nouvelle_reponse(compteur(0, 0, 1), compteur(1), lambda: True, nb_reponses_avant=0,
+                              nb_questions_attendu=1, delai=60.0, intervalle=0.5, horloge=h, dormir=h.dormir,
+                              au_fil=vus.append)
+    assert vus == ["", "", ""]

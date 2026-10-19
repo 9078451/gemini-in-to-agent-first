@@ -42,14 +42,18 @@ def attendre_nouvelle_reponse(
     intervalle: float = 0.3,
     horloge: Callable[[], float] = time.monotonic,
     dormir: Callable[[float], None] = time.sleep,
+    au_fil: Callable[[str], None] | None = None,
 ) -> bool:
     """True dès qu'une nouvelle réponse apparaît ; False après `delai` sans réponse ni
     génération. DelaiDepasse si Gemini génère encore au bout du délai. MessageAbandonne si
     la question a disparu et que plus rien ne se génère depuis `patience_abandon` secondes :
-    Gemini a lâché le message, inutile d'attendre la fin du délai (jusqu'à 10 min)."""
+    Gemini a lâché le message, inutile d'attendre la fin du délai (jusqu'à 10 min).
+    `au_fil("")` est appelé à chaque vérification : il peut lever une exception (arrêt demandé)."""
     fin = horloge() + delai
     disparue_depuis = None
     while horloge() < fin:
+        if au_fil is not None:
+            au_fil("")
         if compter_reponses() > nb_reponses_avant:
             return True
         if compter_questions() < nb_questions_attendu and not generation_en_cours():
@@ -74,11 +78,13 @@ def attendre_fin_reponse(
     horloge: Callable[[], float] = time.monotonic,
     dormir: Callable[[float], None] = time.sleep,
     stabilite_apres_generation: float = 0.6,
+    au_fil: Callable[[str], None] | None = None,
 ) -> str:
     """Renvoie le texte quand la génération est finie et que le texte n'a plus bougé
     pendant `stabilite` secondes — ou seulement `stabilite_apres_generation` si on a vu
     Gemini générer puis s'arrêter : ce signal est sûr, inutile d'attendre 2 s à chaque
-    réponse. Lève DelaiDepasse après `delai_max`."""
+    réponse. Lève DelaiDepasse après `delai_max`. `au_fil(texte)` reçoit le texte à chaque
+    vérification, pour l'afficher pendant qu'il s'écrit ; il peut lever une exception (arrêt)."""
     debut = horloge()
     dernier_texte = lire_texte()
     dernier_changement = debut
@@ -89,6 +95,8 @@ def attendre_fin_reponse(
             raise DelaiDepasse(delai_max, dernier_texte.strip())
         texte = lire_texte()
         en_cours = generation_en_cours()
+        if au_fil is not None:
+            au_fil(texte)
         vu_generer = vu_generer or en_cours
         attente = stabilite_apres_generation if vu_generer else stabilite
         if texte != dernier_texte:
