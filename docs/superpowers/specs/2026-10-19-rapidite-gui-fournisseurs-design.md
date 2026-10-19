@@ -1,7 +1,7 @@
 # agent.first — rapidité, interface épurée, autres fournisseurs d'IA — fiche de conception
 
 Date : 2026-10-19
-Statut : plan et maquette validés (19/10) ; l'utilisateur ajoute les sites web
+Statut : plan et maquette validés (19/10), réalisé le 19/10 ; l'utilisateur ajoute les sites web
 ChatGPT et Claude.ai pilotés avec ses comptes, en plus des clés API.
 
 ## 1. Pourquoi
