@@ -24,7 +24,7 @@ from agent_first.file_attente import FileAttente
 from agent_first.fils_serveur import plus_de_fils
 from agent_first.historique import ConversationInconnue, Historique
 from agent_first.nettoyage import nettoyer_html
-from fournisseurs.catalogue import CATALOGUE, PAR_DEFAUT, WEB
+from fournisseurs.catalogue import ADRESSE_MODIFIABLE, CATALOGUE, PAR_DEFAUT, WEB
 from fournisseurs.reglages import ReglagesFournisseurs
 from fournisseurs.repartiteur import Repartiteur
 from fournisseurs.service import ServiceFournisseurs
@@ -166,6 +166,9 @@ def creer_app(
             return erreur(404, INCONNU)
         if identifiant == PAR_DEFAUT and demande.actif is False:
             return erreur(422, "Gemini reste actif : c'est le fournisseur par défaut.")
+        if demande.url is not None and identifiant not in ADRESSE_MODIFIABLE:
+            # La clé part vers cette adresse : seules celles d'un serveur local se changent.
+            return erreur(422, "L'adresse de ce fournisseur ne se change pas.")
         reglages.enregistrer(identifiant, actif=demande.actif, cle=demande.cle, modeles=demande.modeles, url=demande.url)
         if demande.cle is not None or demande.url is not None or demande.actif:
             fournisseurs.oublier_modeles(identifiant)  # nouvelle clé ou adresse : la liste sera relue

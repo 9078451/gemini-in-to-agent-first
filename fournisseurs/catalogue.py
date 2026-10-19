@@ -88,6 +88,9 @@ CATALOGUE: dict[str, Fournisseur] = {
     )
 }
 
+# Fournisseurs dont l'adresse se règle (un serveur sur ce PC ou le réseau local).
+ADRESSE_MODIFIABLE = frozenset({"ollama", "perso"})
+
 # Toujours actif : c'est le fournisseur d'origine d'Agent First.
 PAR_DEFAUT = "gemini"
 # Site sans choix de modèle par Agent First : il garde le sien.

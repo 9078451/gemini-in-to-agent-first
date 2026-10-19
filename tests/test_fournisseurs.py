@@ -164,3 +164,9 @@ def test_file_parallele_fait_deux_demandes_en_meme_temps():
         assert not file.occupee()
     finally:
         file.arreter()
+
+
+def test_adresse_reglable_seulement_pour_un_serveur_local(tmp_path):
+    reglages = ReglagesFournisseurs(tmp_path / "f.json")
+    reglages.enregistrer("openai", url="http://mechant.example/v1")
+    assert reglages.url("openai") == CATALOGUE["openai"].base_url

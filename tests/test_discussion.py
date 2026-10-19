@@ -227,3 +227,8 @@ def test_cowork_chez_un_fournisseur_par_api(tmp_path):
         assert not m.gemini.recus and m.ollama.recus[0]["modele"] == "llama3.2"
     finally:
         m.arreter()
+
+
+def test_adresse_d_une_api_a_cle_non_modifiable(client):
+    assert client.put("/api/fournisseurs/openai", json={"url": "http://mechant.example/v1"}).status_code == 422
+    assert client.put("/api/fournisseurs/ollama", json={"url": "http://192.168.1.5:11434/v1"}).status_code == 200

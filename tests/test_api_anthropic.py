@@ -133,3 +133,13 @@ def test_liste_des_modeles(reglages, tmp_path):
                          "created_at": "2026-09-01T00:00:00Z"}], "has_more": False, "first_id": None, "last_id": None}
     p = pilote(Serveur(httpx2.Response(200, json=donnees)), reglages, tmp_path)
     assert p.lister_modeles() == ["claude-opus-5-5"]
+
+
+def test_options_refusees_par_un_ancien_modele_renvoye_sans(reglages, tmp_path):
+    refus = httpx2.Response(400, json={"type": "error", "error": {"type": "invalid_request_error",
+                                                                  "message": "effort is not supported on this model"}})
+    serveur = Serveur(refus, sse(flux_claude("ok")))
+    r = pilote(serveur, reglages, tmp_path).envoyer(None, "Salut", modele="claude-ancien", niveau="Max.")
+    assert r.reponse == "ok"
+    assert "output_config" in serveur.corps(0) and "output_config" not in serveur.corps(1)
+    assert "fallbacks" not in serveur.corps(1)

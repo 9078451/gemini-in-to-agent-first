@@ -10,7 +10,7 @@ import os
 import threading
 from pathlib import Path
 
-from fournisseurs.catalogue import CATALOGUE, PAR_DEFAUT
+from fournisseurs.catalogue import ADRESSE_MODIFIABLE, CATALOGUE, PAR_DEFAUT
 
 journal = logging.getLogger(__name__)
 
@@ -50,7 +50,8 @@ class ReglagesFournisseurs:
         return self.config(identifiant)["cle"]
 
     def url(self, identifiant: str) -> str:
-        return self.config(identifiant)["url"] or CATALOGUE[identifiant].base_url
+        url = self.config(identifiant)["url"] if identifiant in ADRESSE_MODIFIABLE else None
+        return url or CATALOGUE[identifiant].base_url
 
     def secours(self) -> dict:
         with self._verrou:
@@ -64,7 +65,7 @@ class ReglagesFournisseurs:
             publics.append({
                 "id": identifiant, "nom": f.nom, "type": f.type, "actif": c["actif"],
                 "cle": masquer(c["cle"]), "cle_requise": f.cle_requise, "modeles": c["modeles"],
-                "url": c["url"] or f.base_url or f.url_site, "url_modifiable": identifiant in ("ollama", "perso"),
+                "url": c["url"] or f.base_url or f.url_site, "url_modifiable": identifiant in ADRESSE_MODIFIABLE,
                 "aide": f.aide, "niveaux": f.niveaux,
             })
         return publics

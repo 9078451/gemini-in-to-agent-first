@@ -27,6 +27,7 @@ NOM = "Claude"
 MAX_TOKENS = 64000  # en flux : pas de délai HTTP à craindre, de la place pour répondre
 BETAS = ["server-side-fallback-2026-07-01"]
 DELAI_DEFAUT = 600.0
+OPTIONS_REFUSABLES = ("effort", "output_config", "fallback", "beta")
 
 
 def traduire(erreur: Exception, modele: str, partiel: str = "") -> Exception:
@@ -100,13 +101,17 @@ class PiloteClaudeAPI:
         ecriture = Ecriture(au_fil)
         client = self._client().with_options(timeout=delai or DELAI_DEFAUT)
         try:
-            with client.beta.messages.stream(**parametres) as flux:
-                for evenement in flux:
-                    if evenement.type == "text":
-                        ecriture.ajouter(evenement.text)
-                    else:
-                        ecriture.verifier()  # réflexion, signal de maintien : un arrêt demandé est vu
-                final = flux.get_final_message()
+            try:
+                final = self._flux(client, parametres, ecriture)
+            except anthropic.BadRequestError as e:
+                # Un modèle plus ancien peut refuser le niveau ou le repli : renvoyé sans eux, une fois.
+                options = {"output_config", "fallbacks", "betas"} & parametres.keys()
+                if ecriture.texte or not options or not any(m in str(e).lower() for m in OPTIONS_REFUSABLES):
+                    raise
+                journal.info("Claude refuse %s pour %s : renvoyé sans", sorted(options), modele)
+                for cle in options:
+                    del parametres[cle]
+                final = self._flux(client, parametres, ecriture)
         except Interrompu:
             if ecriture.texte:
                 self._memoire.ecrire(adresse, messages + [{"role": "assistant", "content": ecriture.texte}])
@@ -125,6 +130,16 @@ class PiloteClaudeAPI:
         )
 
     # ---- interne ----------------------------------------------------------
+
+    @staticmethod
+    def _flux(client, parametres: dict, ecriture: Ecriture):
+        with client.beta.messages.stream(**parametres) as flux:
+            for evenement in flux:
+                if evenement.type == "text":
+                    ecriture.ajouter(evenement.text)
+                else:
+                    ecriture.verifier()  # réflexion, signal de maintien : un arrêt demandé est vu
+            return flux.get_final_message()
 
     def _client(self):
         cle = self._reglages.cle(ID)
