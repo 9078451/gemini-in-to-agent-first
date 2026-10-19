@@ -14,11 +14,13 @@ class ErreurPilote(Exception):
 
 
 class Interrompu(ErreurPilote):
-    """L'utilisateur a arrêté la réponse : `partiel` est ce qui était écrit."""
+    """L'utilisateur a arrêté la réponse : `partiel` est ce qui était écrit, `adresse` la
+    conversation chez le fournisseur (si le pilote la connaît)."""
 
-    def __init__(self, partiel: str = "", html: str = "") -> None:
+    def __init__(self, partiel: str = "", html: str = "", adresse: str | None = None) -> None:
         self.partiel = partiel
         self.html = html
+        self.adresse = adresse
         super().__init__("Réponse interrompue.")
 
 

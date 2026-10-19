@@ -231,7 +231,7 @@ class PiloteGemini:
             )
         except Interrompu:
             self._arreter_generation(page)
-            raise Interrompu(sonde.texte().strip(), sonde.html())
+            raise Interrompu(sonde.texte().strip(), sonde.html(), page.url)
         except DelaiDepasse as e:
             raise DelaiDepasse(delai, e.partiel) from e  # le message cite la limite entière, pas le reste
         nouvelle = premier_present(page, "reponse").nth(nb_avant)
