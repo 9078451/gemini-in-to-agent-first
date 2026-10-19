@@ -1,9 +1,11 @@
 # gemini-in-to-agent-first
 
 **agent.first** : discuter avec Gemini (le site web, avec ton compte Google)
-depuis une app sur mesure. L'app envoie chaque message à **Agent First**, qui
-pilote un Chrome dédié sur gemini.google.com, choisit le modèle et le niveau
-de réflexion, lit la réponse et la garde dans l'historique.
+— et désormais avec d'autres IA — depuis une app sur mesure. L'app envoie
+chaque message à **Agent First**, qui pilote un Chrome dédié sur
+gemini.google.com (ou ChatGPT, Claude.ai), ou appelle une API par clé (Claude,
+OpenAI, Mistral, Ollama…), lit la réponse **pendant qu'elle s'écrit** et la
+garde dans l'historique.
 
 ## Installation (une fois)
 
@@ -11,6 +13,9 @@ de réflexion, lit la réponse et la garde dans l'historique.
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 ```
+
+Après une mise à jour, relance la seconde ligne : de nouvelles bibliothèques
+sont nécessaires (`anthropic`, `markdown-it-py`).
 
 Au premier lancement, une fenêtre Chrome séparée (le « Chrome dédié ») s'ouvre
 sur Gemini : connecte-toi à ton compte Google dedans, une seule fois.
@@ -29,14 +34,48 @@ d'écrire) ; une fenêtre fermée est rouverte au message suivant. Si le Chrome
 dédié était déjà ouvert avant la mise à jour, ferme-le une fois : Agent First le
 relance avec les bons réglages.
 
-- **Nouvelle conversation**, choix du **modèle** et du **niveau de réflexion**
-  en haut de la discussion ; Entrée envoie, Maj+Entrée va à la ligne.
-- **Accueil / Historique** : statistiques, recherche, reprise ou retrait d'une
-  conversation (elle reste dans Gemini).
-- **Paramètres** : modèle et niveau par défaut, état de Chrome et de Google,
-  adresse et clé de l'API réseau.
+- Sous la zone de saisie : **un seul menu des modèles**, rangé par fournisseur
+  (avec son état : prêt, limite jusqu'à telle heure, déconnecté…), et le
+  **niveau de réflexion** quand le fournisseur en a. Entrée envoie,
+  Maj+Entrée va à la ligne.
+- La réponse s'affiche **pendant qu'elle s'écrit** ; **Arrêter** (ou Échap) la
+  coupe et garde ce qui est écrit. Blocs de code avec bouton Copier.
+- **Ctrl+K** : chercher une conversation (titres et messages) ou une action ;
+  **Ctrl+Maj+O** : nouvelle conversation. Renommer : crayon dans la barre, ou
+  double-clic sur le titre.
+- **Tableau de bord** : statistiques, recherche, reprise ou retrait d'une
+  conversation (elle reste chez le fournisseur).
+- **Paramètres** (onglets) : choix par défaut et secours, fournisseurs et clés,
+  API réseau, état de Chrome, de Google et des fournisseurs.
 
 L'historique est dans `donnees/historique.db` (sur ton PC, exclu de git).
+
+## Fournisseurs d'IA
+
+Active-les dans **Paramètres → Fournisseurs**.
+
+- **Sites, avec ton compte**, pilotés dans le Chrome dédié comme Gemini :
+  **ChatGPT** et **Claude.ai**. Clique « Ouvrir dans le Chrome dédié » une fois
+  pour t'y connecter. ⚠️ Ces sites interdisent l'usage automatisé dans leurs
+  conditions : ton compte peut être limité. Leurs pages changent souvent ; si
+  un repère n'est plus trouvé : `python -m pilote.inspecter --site chatgpt`
+  (ou `claude_web`), puis corrige `pilote/sites.py`.
+- **API, avec une clé** (plus rapides et stables) : Claude (Anthropic),
+  OpenAI, Gemini API (clé gratuite sur AI Studio), Mistral, Groq, OpenRouter,
+  DeepSeek, xAI, et **Ollama** sur ce PC (gratuit, sans Internet), ou tout
+  serveur « compatible OpenAI » (LM Studio…). Colle la clé, puis « Lire la
+  liste » pour choisir les modèles du menu. Les clés restent dans
+  `donnees/fournisseurs.json` (exclu de git) et ne sont jamais réaffichées en
+  entier.
+
+Changer de fournisseur au milieu d'une conversation marche : le nouveau reçoit
+l'historique.
+
+**Secours si limite ou panne** (Paramètres → Général, ou l'interrupteur en bas
+du menu des modèles) : si le fournisseur d'une conversation atteint sa limite
+ou ne répond plus, le message repart chez le fournisseur de secours, avec
+l'historique, et la conversation y continue. La réponse l'indique (« secours ·
+Gemini à sa limite »). En Cowork, la tâche continue chez le secours.
 
 ## Mode Cowork
 
@@ -72,7 +111,13 @@ Agent First.
   binaires ; `read` peut lire un passage (`start`, `end`) d'un gros fichier.
 
 Conseil : 4 Argon avec la réflexion **Min.** ou **Moyen** ; « Max. » peut
-abandonner une longue demande sans répondre.
+abandonner une longue demande sans répondre. Cowork marche aussi avec les
+autres fournisseurs (choisis-le dans le menu des modèles avant d'envoyer) : un
+modèle par API (Claude, OpenAI…) y est souvent plus rapide et plus régulier.
+
+**Pilote plus rapide.** Chaque vérification de la page (la réponse est-elle
+finie ?) se fait en un seul échange avec Chrome : 2,6 ms au lieu de 25 ms,
+mesuré sur la vraie page Gemini le 19/10.
 
 ## API réseau
 
@@ -97,9 +142,16 @@ reponse = client.chat.completions.create(
 print(reponse.choices[0].message.content)
 ```
 
+`model` : un modèle de Gemini (« 4 Argon »), ou **« fournisseur/modèle »** pour
+un autre fournisseur actif (`anthropic/claude-opus-5-5`, `ollama/llama3.2`,
+`chatgpt/Par défaut`…) ; `/v1/models` les liste tous. Avec `stream=True`, la
+réponse arrive **au fil de l'eau**, morceau par morceau. Le secours s'applique
+aussi.
+
 Renvoyer l'historique complet (comme le fait un client OpenAI) continue la même
-conversation Gemini. Ces appels passent par la fenêtre du Chat : ils répondent
-pendant une tâche Cowork, mais un à la fois (les suivants attendent leur tour).
+conversation. Ces appels passent par la fenêtre du Chat : ils répondent
+pendant une tâche Cowork, mais un à la fois par site (les API par clé, elles,
+répondent à plusieurs demandes en même temps).
 
 **Tâches Cowork** :
 
@@ -134,6 +186,12 @@ node --test tests/web/outils.test.mjs tests/web/outils_cowork.test.mjs  tests Ja
 .venv\Scripts\python -m pilote.modes                                    modèles et niveaux de Gemini
 .venv\Scripts\python -m pilote.essai "Bonjour"                          essai direct du pilote
 .venv\Scripts\python -m pilote.inspecter                                repères de la page Gemini
+.venv\Scripts\python -m pilote.inspecter --site chatgpt                 repères de ChatGPT (ou claude_web)
 ```
+
+**Port du Chrome dédié** : Windows réserve parfois au démarrage une plage de
+ports qui contient le 9222 (voir `netsh int ipv4 show excludedportrange
+protocol=tcp`). Agent First le détecte : Chrome prend alors un port libre et
+Agent First le retrouve tout seul.
 
 Conception : `docs/superpowers/specs/` · Plans : `docs/superpowers/plans/`
